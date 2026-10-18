@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.control-test.js"
   },
   "engines": {
     "node": ">=20"
