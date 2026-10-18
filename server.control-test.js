@@ -46,9 +46,12 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
-function cookieOptions(maxAge = 0) {
+function cookieOptions(maxAge = 0, sameSite = "Lax") {
   const secure = process.env.COOKIE_SECURE === "true" ? "; Secure" : "";
-  return `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+  if (sameSite === "None" && !secure) {
+    throw new Error("SameSite=NoneにはSecureが必要です");
+  }
+  return `Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure}`;
 }
 
 function sign(value) {
@@ -215,6 +218,30 @@ async function readUsageStats() {
 }
 
 const server = http.createServer(async (req, res) => {
+  const origin = req.headers.origin;
+
+  // Allow only the deployed portal origin.
+  if (origin === APP_ORIGIN) {
+    res.setHeader("Access-Control-Allow-Origin", APP_ORIGIN);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Vary", "Origin");
+  }
+
+  // Reject browser requests from unapproved origins.
+  if (origin && origin !== APP_ORIGIN) {
+    return sendJson(res, 403, { ok: false, message: "Origin not allowed" });
+  }
+
+  if (req.method === "OPTIONS") {
+    if (origin !== APP_ORIGIN) {
+      return sendJson(res, 403, { ok: false });
+    }
+    res.writeHead(204);
+    return res.end();
+  }
+
   const url = new URL(req.url || "/", "http://127.0.0.1");
 
   try {
@@ -323,7 +350,7 @@ const server = http.createServer(async (req, res) => {
       const session = makeSession(user.id);
       return redirect(res, APP_ORIGIN, [
         clearState,
-        `${COOKIE_NAME}=${session}; ${cookieOptions(SESSION_SECONDS)}`
+        `${COOKIE_NAME}=${session}; ${cookieOptions(SESSION_SECONDS, "None")}`
       ]);
     }
 
@@ -347,7 +374,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
-        "Set-Cookie": `${COOKIE_NAME}=; ${cookieOptions(0)}`,
+        "Set-Cookie": `${COOKIE_NAME}=; ${cookieOptions(0, "None")}`,
         "X-Content-Type-Options": "nosniff"
       });
       return res.end(JSON.stringify({ ok: true }));
