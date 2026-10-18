@@ -1,0 +1,27 @@
+.env
+.agent_secret
+.venv/
+node
+*.before-*
+*.backup
+node_modules/
+npm-debug.log*
+
+# Runtime data
+control-queue/queue.json
+control-queue/queue.tmp
+
+# Local runtime files
+node
+tankyutyan-api@1.0.0
+
+# Local backups and test snapshots
+*.before-*
+*.backup
+*.bak
+
+# Old local test server
+server.auth-test.js
+
+# Legacy API without authentication
+/server.js
