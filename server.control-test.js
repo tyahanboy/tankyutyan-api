@@ -246,6 +246,29 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" &&
+        url.pathname === "/" &&
+        !url.search) {
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"
+      });
+
+      return res.end(`<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="google-site-verification" content="CKjZbcTBaogKgKE-nycZGDxFNKRTb_oibeMwMumtH8g">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>たんきゅーちゃん API</title>
+</head>
+<body>
+  <h1>たんきゅーちゃん API</h1>
+  <p>API service is running.</p>
+</body>
+</html>`);
+    }
+    if (req.method === "GET" &&
         url.pathname === "/api/health") {
       return sendJson(res, 200, {
         ok: true, service: "tankyutyan-auth-test"
