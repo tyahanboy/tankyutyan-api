@@ -366,7 +366,7 @@ const server = http.createServer(async (req, res) => {
         !body.by_date.every(item =>
           item && typeof item === "object" && !Array.isArray(item) &&
           typeof item.date === "string" &&
-          /^\\d{4}-\\d{2}-\\d{2}$/.test(item.date) &&
+          /^\d{4}-\d{2}-\d{2}$/.test(item.date) &&
           ["total", "success", "failed"].every(key =>
             Number.isSafeInteger(item[key]) && item[key] >= 0
           ) &&
