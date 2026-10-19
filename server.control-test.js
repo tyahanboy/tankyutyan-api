@@ -18,6 +18,77 @@ const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const AGENT_SECRET = process.env.AGENT_SECRET;
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+async function readBotSettings() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/bot_settings?id=eq.1&select=bot_display_name,search_enabled,max_answer_tokens,maintenance_mode`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+        },
+        signal: AbortSignal.timeout(8000)
+      }
+    );
+    if (!r.ok) return null;
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows[0]) return null;
+    const x = rows[0];
+    return {
+      botDisplayName: x.bot_display_name,
+      searchEnabled: x.search_enabled,
+      maxAnswerTokens: x.max_answer_tokens,
+      maintenanceMode: x.maintenance_mode
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeBotSettings(x) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/bot_settings?id=eq.1`,
+      {
+        method: "PATCH",
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation"
+        },
+        body: JSON.stringify({
+          bot_display_name: x.botDisplayName,
+          search_enabled: x.searchEnabled,
+          max_answer_tokens: x.maxAnswerTokens,
+          maintenance_mode: x.maintenanceMode,
+          updated_at: new Date().toISOString()
+        }),
+        signal: AbortSignal.timeout(8000)
+      }
+    );
+    if (!r.ok) return null;
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows[0]) return null;
+    const v = rows[0];
+    return {
+      botDisplayName: v.bot_display_name,
+      searchEnabled: v.search_enabled,
+      maxAnswerTokens: v.max_answer_tokens,
+      maintenanceMode: v.maintenance_mode
+    };
+  } catch {
+    return null;
+  }
+}
+
+
 const ADMIN_IDS = new Set(
   (process.env.DISCORD_ADMIN_IDS || "")
     .split(",").map(v => v.trim()).filter(Boolean)
@@ -620,6 +691,84 @@ const server = http.createServer(async (req, res) => {
         ok: true, stats: latestUsageStats
       });
     }
+
+
+    if (url.pathname === "/api/settings" &&
+        (req.method === "GET" || req.method === "POST")) {
+      if (!verifySession(req)) {
+        return sendJson(res, 401, {
+          ok: false, message: "ログインが必要だよ"
+        });
+      }
+
+      if (req.method === "GET") {
+        const settings = await readBotSettings();
+        if (!settings) {
+          return sendJson(res, 503, {
+            ok: false, message: "設定を取得できへんかったよ"
+          });
+        }
+        return sendJson(res, 200, { ok: true, settings });
+      }
+
+      if (!String(req.headers["content-type"] || "")
+          .toLowerCase().includes("application/json")) {
+        return sendJson(res, 415, {
+          ok: false, message: "JSON形式で送信してな"
+        });
+      }
+
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, {
+          ok: false, message: "送信内容を読み取れへんかったよ"
+        });
+      }
+
+      if (!body || typeof body.botDisplayName !== "string" ||
+          !body.botDisplayName.trim() ||
+          body.botDisplayName.trim().length > 50 ||
+          typeof body.searchEnabled !== "boolean" ||
+          !Number.isInteger(body.maxAnswerTokens) ||
+          body.maxAnswerTokens < 100 || body.maxAnswerTokens > 2000 ||
+          typeof body.maintenanceMode !== "boolean") {
+        return sendJson(res, 400, {
+          ok: false, message: "設定値を確認してな"
+        });
+      }
+
+      const settings = await writeBotSettings({
+        ...body,
+        botDisplayName: body.botDisplayName.trim()
+      });
+      if (!settings) {
+        return sendJson(res, 503, {
+          ok: false, message: "設定を保存できへんかったよ"
+        });
+      }
+      return sendJson(res, 200, { ok: true, settings });
+    }
+
+    if (req.method === "GET" &&
+        url.pathname === "/api/agent/settings") {
+      const supplied = req.headers["x-agent-secret"];
+      if (typeof supplied !== "string" ||
+          !safeEqual(supplied, AGENT_SECRET || "")) {
+        return sendJson(res, 401, {
+          ok: false, message: "認証に失敗したよ"
+        });
+      }
+      const settings = await readBotSettings();
+      if (!settings) {
+        return sendJson(res, 503, {
+          ok: false, message: "設定を取得できへんかったよ"
+        });
+      }
+      return sendJson(res, 200, { ok: true, settings });
+    }
+
 
     return sendJson(res, 404, {
       ok: false, message: "そのAPIはまだないよ"
