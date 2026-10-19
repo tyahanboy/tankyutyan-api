@@ -346,7 +346,8 @@ const server = http.createServer(async (req, res) => {
       }
 
       const requiredCounts = [
-        "total", "success", "failed", "today_success"
+        "total", "success", "failed", "today_success",
+        "prompt_tokens", "completion_tokens", "total_tokens"
       ];
 
       if (
@@ -398,6 +399,9 @@ const server = http.createServer(async (req, res) => {
         total: body.total,
         success: body.success,
         failed: body.failed,
+        prompt_tokens: body.prompt_tokens,
+        completion_tokens: body.completion_tokens,
+        total_tokens: body.total_tokens,
         success_rate: body.success_rate,
         today_success: body.today_success,
         by_date: body.by_date,
