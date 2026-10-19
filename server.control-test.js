@@ -31,6 +31,34 @@ const COOKIE_NAME = "tankyutyan_session";
 const STATE_COOKIE = "tankyutyan_oauth_state";
 const pendingStates = new Map();
 
+// Botから受信した最新データ。Render再起動後はBotから再送信する。
+let latestBotStatus = null;
+let latestUsageStats = null;
+
+async function readJsonBody(req, maxBytes = 262144) {
+  const chunks = [];
+  let size = 0;
+
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      throw new Error("Request body too large");
+    }
+    chunks.push(chunk);
+  }
+
+  const parsed = JSON.parse(
+    Buffer.concat(chunks).toString("utf8")
+  );
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid JSON object");
+  }
+
+  return parsed;
+}
+
+
 if (!AGENT_SECRET || !/^[a-f0-9]{64}$/i.test(AGENT_SECRET)) throw new Error("AGENT_SECRETの設定が不正です");
 if (!CLIENT_ID || !CLIENT_SECRET || !SESSION_SECRET ||
     !ADMIN_IDS.size || !APP_ORIGIN) {
@@ -245,6 +273,142 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://127.0.0.1");
 
   try {
+    if (
+      req.method === "POST" &&
+      (url.pathname === "/api/agent/status" ||
+       url.pathname === "/api/agent/stats")
+    ) {
+      const suppliedSecret = req.headers["x-agent-secret"];
+
+      if (
+        typeof suppliedSecret !== "string" ||
+        !safeEqual(suppliedSecret, AGENT_SECRET)
+      ) {
+        return sendJson(res, 401, { ok: false });
+      }
+
+      const contentType = String(req.headers["content-type"] || "")
+        .split(";")[0].trim().toLowerCase();
+
+      if (contentType !== "application/json") {
+        return sendJson(res, 415, {
+          ok: false, message: "JSONが必要だよ"
+        });
+      }
+
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, {
+          ok: false, message: "送信データを読み取れなかったよ"
+        });
+      }
+
+      if (url.pathname === "/api/agent/status") {
+        const updatedMs = typeof body.updated_at === "string"
+          ? Date.parse(body.updated_at) : NaN;
+
+        if (
+          typeof body.connected !== "boolean" ||
+          !Number.isFinite(updatedMs) ||
+          updatedMs > Date.now() + 30000 ||
+          !(
+            body.latency_ms === null ||
+            (typeof body.latency_ms === "number" &&
+             Number.isFinite(body.latency_ms) &&
+             body.latency_ms >= 0)
+          ) ||
+          !(
+            body.bot_user === null ||
+            typeof body.bot_user === "string"
+          ) ||
+          !(
+            body.guild_count === null ||
+            (Number.isInteger(body.guild_count) &&
+             body.guild_count >= 0)
+          )
+        ) {
+          return sendJson(res, 400, {
+            ok: false, message: "Bot状態の形式が正しくないよ"
+          });
+        }
+
+        latestBotStatus = {
+          connected: body.connected,
+          latency_ms: body.latency_ms,
+          bot_user: body.bot_user,
+          guild_count: body.guild_count,
+          updated_at: body.updated_at
+        };
+
+        return sendJson(res, 200, { ok: true });
+      }
+
+      const requiredCounts = [
+        "total", "success", "failed", "today_success"
+      ];
+
+      if (
+        !requiredCounts.every(
+          key => Number.isSafeInteger(body[key]) && body[key] >= 0
+        ) ||
+        typeof body.success_rate !== "number" ||
+        !Number.isFinite(body.success_rate) ||
+        body.success_rate < 0 ||
+        body.success_rate > 100 ||
+        !Array.isArray(body.by_date) ||
+        !Array.isArray(body.by_model) ||
+        !Array.isArray(body.by_mode) ||
+        body.by_date.length > 400 ||
+        body.by_model.length > 100 ||
+        body.by_mode.length > 100 ||
+        !body.by_date.every(item =>
+          item && typeof item === "object" && !Array.isArray(item) &&
+          typeof item.date === "string" &&
+          /^\\d{4}-\\d{2}-\\d{2}$/.test(item.date) &&
+          ["total", "success", "failed"].every(key =>
+            Number.isSafeInteger(item[key]) && item[key] >= 0
+          ) &&
+          item.success + item.failed <= item.total
+        ) ||
+        ![body.by_model, body.by_mode].every(items =>
+          items.every(item =>
+            item && typeof item === "object" && !Array.isArray(item) &&
+            typeof item.label === "string" &&
+            item.label.length > 0 && item.label.length <= 200 &&
+            ["count", "success", "failed"].every(key =>
+              Number.isSafeInteger(item[key]) && item[key] >= 0
+            ) &&
+            item.success + item.failed <= item.count
+          )
+        ) ||
+        !(
+          body.updated_at === null ||
+          (typeof body.updated_at === "string" &&
+           Number.isFinite(Date.parse(body.updated_at)))
+        )
+      ) {
+        return sendJson(res, 400, {
+          ok: false, message: "統計データの形式が正しくないよ"
+        });
+      }
+
+      latestUsageStats = {
+        total: body.total,
+        success: body.success,
+        failed: body.failed,
+        success_rate: body.success_rate,
+        today_success: body.today_success,
+        by_date: body.by_date,
+        by_model: body.by_model,
+        by_mode: body.by_mode,
+        updated_at: body.updated_at
+      };
+
+      return sendJson(res, 200, { ok: true });
+    }
+
     if (req.method === "GET" &&
         url.pathname === "/" &&
         !url.search) {
@@ -414,49 +578,43 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" &&
         url.pathname === "/api/bot/status") {
-      try {
-        const status = JSON.parse(
-          await fs.readFile(BOT_STATUS_FILE, "utf8")
-        );
-        const updatedAt = typeof status.updated_at === "string"
-          ? Date.parse(status.updated_at) : NaN;
-        const stale = !Number.isFinite(updatedAt) ||
-          Date.now() - updatedAt > STALE_AFTER_MS ||
-          updatedAt > Date.now() + 30000;
+      const status = latestBotStatus;
 
-        return sendJson(res, 200, {
-          ok: true,
-          bot: {
-            connected: status.connected === true && !stale,
-            stale,
-            latency_ms: Number.isFinite(status.latency_ms)
-              ? status.latency_ms : null,
-            bot_user: typeof status.bot_user === "string"
-              ? status.bot_user : null,
-            guild_count: Number.isInteger(status.guild_count)
-              ? status.guild_count : null,
-            updated_at: typeof status.updated_at === "string"
-              ? status.updated_at : null
-          }
-        });
-      } catch {
+      if (!status) {
         return sendJson(res, 503, {
           ok: false, bot: null,
           message: "まだ眠いよぉ…もう少し寝かせて…？"
         });
       }
+
+      const updatedAt = Date.parse(status.updated_at);
+      const stale = !Number.isFinite(updatedAt) ||
+        Date.now() - updatedAt > STALE_AFTER_MS ||
+        updatedAt > Date.now() + 30000;
+
+      return sendJson(res, 200, {
+        ok: true,
+        bot: {
+          connected: status.connected === true && !stale,
+          stale,
+          latency_ms: status.latency_ms,
+          bot_user: status.bot_user,
+          guild_count: status.guild_count,
+          updated_at: status.updated_at
+        }
+      });
     }
 
     if (req.method === "GET" && url.pathname === "/api/stats") {
-      try {
-        return sendJson(res, 200, {
-          ok: true, stats: await readUsageStats()
-        });
-      } catch {
+      if (!latestUsageStats) {
         return sendJson(res, 503, {
-          ok: false, message: "利用統計を読み取れなかったよ"
+          ok: false, message: "利用統計をまだ受信していないよ"
         });
       }
+
+      return sendJson(res, 200, {
+        ok: true, stats: latestUsageStats
+      });
     }
 
     return sendJson(res, 404, {
