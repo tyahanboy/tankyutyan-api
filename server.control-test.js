@@ -1,6 +1,9 @@
 import { enqueueAction, listActions } from "./control-queue/queue.js";
 import http from "node:http";
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   randomBytes,
   createHmac,
@@ -143,6 +146,98 @@ function sendJson(res, statusCode, data) {
     "X-Content-Type-Options": "nosniff"
   });
   res.end(JSON.stringify(data));
+}
+
+// ---- 同一オリジン配信用の静的ファイル（public/ 配下のみ） ----
+const PUBLIC_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), "public"
+);
+const HAS_PUBLIC_INDEX = existsSync(path.join(PUBLIC_DIR, "index.html"));
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8"
+};
+
+// 処理した(レスポンスを返した)ら true、対象外なら false
+async function serveStatic(req, res, pathname) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    sendJson(res, 400, { ok: false, message: "不正なパスだよ" });
+    return true;
+  }
+
+  if (decoded.includes("\0") || decoded.includes("\\") ||
+      decoded.split("/").some(seg => seg.startsWith("."))) {
+    sendJson(res, 404, { ok: false, message: "見つからないよ" });
+    return true;
+  }
+
+  const hasExt = path.extname(decoded) !== "";
+  let target = path.resolve(PUBLIC_DIR, "." + decoded);
+  if (target !== PUBLIC_DIR && !target.startsWith(PUBLIC_DIR + path.sep)) {
+    sendJson(res, 403, { ok: false, message: "アクセスできないよ" });
+    return true;
+  }
+
+  let real = null;
+  try {
+    real = await fs.realpath(target);
+    const root = await fs.realpath(PUBLIC_DIR);
+    if (real !== root && !real.startsWith(root + path.sep)) {
+      sendJson(res, 403, { ok: false, message: "アクセスできないよ" });
+      return true;
+    }
+    if (!(await fs.stat(real)).isFile()) real = null;
+  } catch {
+    real = null;
+  }
+
+  if (!real) {
+    // 拡張子なしの画面パスだけSPAフォールバック。存在しないassetは404。
+    if (hasExt || !HAS_PUBLIC_INDEX) {
+      if (!HAS_PUBLIC_INDEX) return false;
+      sendJson(res, 404, { ok: false, message: "見つからないよ" });
+      return true;
+    }
+    real = path.join(PUBLIC_DIR, "index.html");
+  }
+
+  const ext = path.extname(real).toLowerCase();
+  const isHtml = ext === ".html";
+  const headers = {
+    "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": isHtml
+      ? "no-store"
+      : pathname.startsWith("/assets/")
+        ? "public, max-age=31536000, immutable"
+        : "no-cache"
+  };
+  if (isHtml) {
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "same-origin";
+  }
+
+  const body = await fs.readFile(real);
+  headers["Content-Length"] = body.length;
+  res.writeHead(200, headers);
+  res.end(req.method === "HEAD" ? undefined : body);
+  return true;
 }
 
 function cookieOptions(maxAge = 0, sameSite = "Lax") {
@@ -486,7 +581,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" &&
         url.pathname === "/" &&
-        !url.search) {
+        !url.search &&
+        !HAS_PUBLIC_INDEX) {
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
@@ -769,6 +865,12 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, settings });
     }
 
+    // /api/* は必ず上のAPI処理が優先。未知のAPIはHTMLではなくJSON 404。
+    if ((req.method === "GET" || req.method === "HEAD") &&
+        url.pathname !== "/api" &&
+        !url.pathname.startsWith("/api/")) {
+      if (await serveStatic(req, res, url.pathname)) return;
+    }
 
     return sendJson(res, 404, {
       ok: false, message: "そのAPIはまだないよ"
