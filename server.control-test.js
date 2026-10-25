@@ -1,3 +1,6 @@
+if (existsSync(".env")) {
+  process.loadEnvFile();
+}
 import { enqueueAction, listActions } from "./control-queue/queue.js";
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -49,6 +52,97 @@ async function readBotSettings() {
       maintenanceMode: x.maintenance_mode
     };
   } catch {
+    return null;
+  }
+}
+
+
+async function readUserPower(userId) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+
+  try {
+    const query = new URLSearchParams({
+      user_id: `eq.${userId}`,
+      select: "user_id,reasoning_effort,updated_at",
+      limit: "1"
+    });
+
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/user_power_settings?${query}`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+        },
+        signal: AbortSignal.timeout(8000)
+      }
+    );
+
+    if (!r.ok) return null;
+    const rows = await r.json();
+
+    if (!Array.isArray(rows)) return null;
+    if (!rows[0]) {
+      return {
+        userId,
+        reasoningEffort: "medium",
+        updatedAt: null
+      };
+    }
+
+    return {
+      userId: rows[0].user_id,
+      reasoningEffort: rows[0].reasoning_effort,
+      updatedAt: rows[0].updated_at
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeUserPower(userId, effort) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  if (!["low", "medium", "high"].includes(effort)) return null;
+
+  try {
+    const query = new URLSearchParams({
+      on_conflict: "user_id"
+    });
+
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/user_power_settings?${query}`,
+      {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates,return=representation"
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          reasoning_effort: effort,
+          updated_at: new Date().toISOString()
+        }),
+        signal: AbortSignal.timeout(8000)
+      }
+    );
+
+    if (!r.ok) {
+      const errorText = await r.text();
+      console.error("[writeUserPower] Supabase error:", r.status, errorText);
+      return null;
+    }
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows[0]) return null;
+
+    return {
+      userId: rows[0].user_id,
+      reasoningEffort: rows[0].reasoning_effort,
+      updatedAt: rows[0].updated_at
+    };
+  } catch (error) {
+    console.error("[writeUserPower] Exception:", error?.name || "UnknownError");
     return null;
   }
 }
@@ -863,6 +957,80 @@ const server = http.createServer(async (req, res) => {
         });
       }
       return sendJson(res, 200, { ok: true, settings });
+    }
+
+
+    if (req.method === "GET" &&
+        url.pathname === "/api/agent/user-power") {
+      const supplied = req.headers["x-agent-secret"];
+      if (typeof supplied !== "string" ||
+          !safeEqual(supplied, AGENT_SECRET || "")) {
+        return sendJson(res, 401, {
+          ok: false, message: "認証に失敗したよ"
+        });
+      }
+
+      const userId = url.searchParams.get("user_id") || "";
+      if (!/^\d{17,20}$/.test(userId)) {
+        return sendJson(res, 400, {
+          ok: false, message: "DiscordユーザーIDを確認してな"
+        });
+      }
+
+      const setting = await readUserPower(userId);
+      if (!setting) {
+        return sendJson(res, 503, {
+          ok: false, message: "ユーザー設定を取得できへんかったよ"
+        });
+      }
+      return sendJson(res, 200, { ok: true, setting });
+    }
+
+    if (req.method === "POST" &&
+        url.pathname === "/api/agent/user-power") {
+      const supplied = req.headers["x-agent-secret"];
+      if (typeof supplied !== "string" ||
+          !safeEqual(supplied, AGENT_SECRET || "")) {
+        return sendJson(res, 401, {
+          ok: false, message: "認証に失敗したよ"
+        });
+      }
+
+      if (!String(req.headers["content-type"] || "")
+          .toLowerCase().includes("application/json")) {
+        return sendJson(res, 415, {
+          ok: false, message: "JSON形式で送信してな"
+        });
+      }
+
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, {
+          ok: false, message: "送信内容を読み取れへんかったよ"
+        });
+      }
+
+      if (!body ||
+          typeof body.user_id !== "string" ||
+          !/^\d{17,20}$/.test(body.user_id) ||
+          !["low", "medium", "high"].includes(body.reasoning_effort)) {
+        return sendJson(res, 400, {
+          ok: false, message: "ユーザーIDまたは設定値を確認してな"
+        });
+      }
+
+      const setting = await writeUserPower(
+        body.user_id,
+        body.reasoning_effort
+      );
+      if (!setting) {
+        return sendJson(res, 503, {
+          ok: false, message: "ユーザー設定を保存できへんかったよ"
+        });
+      }
+      return sendJson(res, 200, { ok: true, setting });
     }
 
     // /api/* は必ず上のAPI処理が優先。未知のAPIはHTMLではなくJSON 404。
