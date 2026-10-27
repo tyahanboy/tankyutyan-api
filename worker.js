@@ -535,15 +535,18 @@ async function handle(request, env) {
       const data = JSON.parse(raw);
       const age = Date.now() - Date.parse(data.updated_at);
       if (age > 5 * 60 * 1000 || age < -30000) {
-        return json({ ...data, connected: false, stale: true });
+        return json({ ok: true, bot: { ...data, connected: false, stale: true } });
       }
-      return json({ ...data, stale: false });
+      return json({ ok: true, bot: { ...data, stale: false } });
     }
 
     if (path === "/api/stats" && method === "GET") {
       const raw = await env.OAUTH_STATE.get("bot:stats");
       if (!raw) return json({ error: "Stats not available" }, 503);
-      return json(JSON.parse(raw));
+      return json({
+        ok: true,
+        stats: JSON.parse(raw),
+      });
     }
 
     if (path === "/api/settings" && method === "GET") {
