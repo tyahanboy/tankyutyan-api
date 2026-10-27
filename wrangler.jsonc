@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tankyutyan-api",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-27",
+  "account_id": "1398f8582395ca969725ff228692ec22",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_STATE",
+      "id": "f6007115e8fd47d5a021cad3b25fe6d4"
+    }
+  ]
+}
