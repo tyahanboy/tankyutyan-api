@@ -547,11 +547,17 @@ async function handle(request, env) {
     }
 
     if (path === "/api/settings" && method === "GET") {
-      return json(await readBotSettings(env));
+      return json({
+        ok: true,
+        settings: await readBotSettings(env),
+      });
     }
 
     if (path === "/api/settings" && method === "POST") {
-      return json(await writeBotSettings(await readJson(request), env));
+      return json({
+        ok: true,
+        settings: await writeBotSettings(await readJson(request), env),
+      });
     }
 
     return json({ error: "Not found" }, 404);
