@@ -6,9 +6,9 @@
   "account_id": "1398f8582395ca969725ff228692ec22",
   "workers_dev": true,
   "vars": {
-    "APP_ORIGIN": "https://lively-limit-5b63.koki20101004.workers.dev",
+    "APP_ORIGIN": "https://tankyutyan-api.koki20101004.workers.dev",
     "DISCORD_ADMIN_IDS": "1490926551322329209,615856132224712705,1306609954593177700,1490993214667231405,1372031779241988227,1472085731978641560",
-    "DISCORD_CALLBACK_URL": "https://lively-limit-5b63.koki20101004.workers.dev/api/auth/callback",
+    "DISCORD_CALLBACK_URL": "https://tankyutyan-api.koki20101004.workers.dev/api/auth/callback",
     "DISCORD_CLIENT_ID": "1552588868602175589",
     "SUPABASE_URL": "https://rgtxclaexxanzijrjjey.supabase.co"
   },
