@@ -87,17 +87,20 @@ async function hmac(value, env) {
   return base64url(new Uint8Array(signature));
 }
 
-async function makeSession(userId, env) {
+async function makeSession(user, env) {
   const payload = base64url(
     encoder.encode(JSON.stringify({
-      uid: userId,
+      uid: user.id,
+      username: user.username ?? null,
+      global_name: user.global_name ?? null,
+      avatar: user.avatar ?? null,
       exp: Math.floor(Date.now() / 1000) + SESSION_SECONDS,
     }))
   );
   return `${payload}.${await hmac(payload, env)}`;
 }
 
-async function verifySession(request, env) {
+async function verifyMemberSession(request, env) {
   const token = readCookies(request)[SESSION_COOKIE];
   if (!token) return null;
 
@@ -113,15 +116,31 @@ async function verifySession(request, env) {
     const data = JSON.parse(decoder.decode(fromBase64url(payload)));
     if (
       typeof data.uid !== "string" ||
-      !adminIds(env).has(data.uid) ||
       !Number.isInteger(data.exp) ||
       data.exp <= Math.floor(Date.now() / 1000)
     ) return null;
 
-    return { id: data.uid };
+    return {
+      id: data.uid,
+      username: typeof data.username === "string" ? data.username : null,
+      global_name: typeof data.global_name === "string" ? data.global_name : null,
+      avatar: typeof data.avatar === "string" ? data.avatar : null,
+      role:
+        data.uid === env.DISCORD_OWNER_ID
+          ? "owner"
+          : adminIds(env).has(data.uid)
+            ? "admin"
+            : "member",
+    };
   } catch {
     return null;
   }
+}
+
+async function verifySession(request, env) {
+  const user = await verifyMemberSession(request, env);
+  if (!user || !["owner", "admin"].includes(user.role)) return null;
+  return user;
 }
 
 async function readJson(request) {
@@ -173,6 +192,108 @@ async function supabase(env, path, options = {}) {
     throw new Error(`Supabase error: ${response.status} ${text.slice(0, 300)}`);
   }
   return text ? JSON.parse(text) : null;
+}
+
+async function supabaseRpc(env, functionName, args) {
+  if (!/^[a-z_]+$/.test(functionName)) {
+    throw new Error("Invalid Supabase RPC name");
+  }
+
+  return await supabase(
+    env,
+    `rpc/${functionName}`,
+    {
+      method: "POST",
+      body: JSON.stringify(args),
+    }
+  );
+}
+
+async function groqChatCompletion(env, messages) {
+  if (!env.GROQ_API_KEY) {
+    throw new Error("Groq configuration is missing");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90000);
+
+  let response;
+  try {
+    response = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-oss-120b",
+          messages,
+          max_completion_tokens: 1200,
+          temperature: 0.6,
+        }),
+        signal: controller.signal,
+      }
+    );
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Groq request timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Groq API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  const rawUsage = data?.usage;
+
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("Groq returned an empty response");
+  }
+
+  const usage = {
+    inputTokens: rawUsage?.prompt_tokens,
+    outputTokens: rawUsage?.completion_tokens,
+    totalTokens: rawUsage?.total_tokens,
+  };
+
+  if (
+    !Number.isSafeInteger(usage.inputTokens) ||
+    !Number.isSafeInteger(usage.outputTokens) ||
+    !Number.isSafeInteger(usage.totalTokens) ||
+    usage.inputTokens < 0 ||
+    usage.outputTokens < 0 ||
+    usage.totalTokens !== usage.inputTokens + usage.outputTokens
+  ) {
+    throw new Error("Groq usage data is missing or invalid");
+  }
+
+  return {
+    answer: content.trim(),
+    usage,
+  };
+}
+
+async function getOwnedConversation(conversationId, userId, env) {
+  if (
+    typeof conversationId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversationId)
+  ) {
+    return null;
+  }
+
+  const rows = await supabase(
+    env,
+    `conversations?id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(userId)}&select=id,user_id,title,created_at,updated_at&limit=1`
+  );
+
+  return Array.isArray(rows) ? (rows[0] || null) : null;
 }
 
 function mapSettings(row) {
@@ -375,7 +496,7 @@ async function handle(request, env) {
       client_id: env.DISCORD_CLIENT_ID,
       redirect_uri: env.DISCORD_CALLBACK_URL,
       response_type: "code",
-      scope: "identify",
+      scope: "identify guilds",
       state,
     });
 
@@ -444,12 +565,48 @@ async function handle(request, env) {
     }
 
     const user = await userResponse.json();
-    if (!adminIds(env).has(user.id)) {
+
+    if (
+      !user ||
+      typeof user.id !== "string" ||
+      typeof user.username !== "string"
+    ) {
+      console.error("Invalid Discord user profile");
+      return redirect(`${appOrigin}/?login=failed`,
+        cookie(STATE_COOKIE, "", 0));
+    }
+
+    if (!env.DISCORD_GUILD_ID) {
+      console.error("DISCORD_GUILD_ID is missing");
+      return redirect(`${appOrigin}/?login=failed`,
+        cookie(STATE_COOKIE, "", 0));
+    }
+
+    const guildsResponse = await fetch(
+      "https://discord.com/api/users/@me/guilds",
+      {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+        },
+      }
+    );
+
+    if (!guildsResponse.ok) {
+      console.error("Failed to fetch Discord guilds");
+      return redirect(`${appOrigin}/?login=failed`,
+        cookie(STATE_COOKIE, "", 0));
+    }
+
+    const guilds = await guildsResponse.json();
+    if (
+      !Array.isArray(guilds) ||
+      !guilds.some(guild => guild.id === env.DISCORD_GUILD_ID)
+    ) {
       return redirect(`${appOrigin}/?login=denied`,
         cookie(STATE_COOKIE, "", 0));
     }
 
-    const session = await makeSession(user.id, env);
+    const session = await makeSession(user, env);
     const headers = new Headers({
       Location: appOrigin,
       "Cache-Control": "no-store",
@@ -460,7 +617,7 @@ async function handle(request, env) {
   }
 
   if (path === "/api/auth/me" && method === "GET") {
-    const user = await verifySession(request, env);
+    const user = await verifyMemberSession(request, env);
     return user ? json({ authenticated: true, user })
       : json({ authenticated: false }, 401);
   }
@@ -518,6 +675,277 @@ async function handle(request, env) {
     }
 
     return json({ error: "Not found" }, 404);
+  }
+
+
+  // Member chat: retrieve credit status
+  if (path === "/api/chat/credits" && method === "GET") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+
+    if (user.role === "owner") {
+      return json({
+        ok: true,
+        is_unlimited: true,
+      }, 200, {
+        "Cache-Control": "no-store",
+      });
+    }
+
+    const rows = await supabase(
+      env,
+      `user_chat_credits?user_id=eq.${encodeURIComponent(user.id)}` +
+      "&select=daily_limit,monthly_limit,daily_used,monthly_used," +
+      "daily_period,monthly_period,bonus_credits,overage_credits&limit=1"
+    );
+
+    const row = rows?.[0] ?? null;
+
+    return json({
+      ok: true,
+      is_unlimited: false,
+      credits: {
+        daily_limit: row?.daily_limit ?? 5000,
+        monthly_limit: row?.monthly_limit ?? 100000,
+        daily_used: row?.daily_used ?? 0,
+        monthly_used: row?.monthly_used ?? 0,
+        daily_period: row?.daily_period ?? null,
+        monthly_period: row?.monthly_period ?? null,
+        bonus_credits: row?.bonus_credits ?? 0,
+        overage_credits: row?.overage_credits ?? 0,
+      },
+    }, 200, {
+      "Cache-Control": "no-store",
+    });
+  }
+
+  // Member chat: retrieve conversation history
+  if (path === "/api/chat/messages" && method === "GET") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+
+    const conversationId = url.searchParams.get("conversation_id");
+    const conversation = await getOwnedConversation(
+      conversationId, user.id, env
+    );
+
+    if (!conversation) {
+      return json({ error: "Conversation not found" }, 404);
+    }
+
+    const rows = await supabase(
+      env,
+      `messages?conversation_id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}&select=id,role,content,created_at&order=created_at.asc&limit=100`
+    );
+
+    return json({
+      ok: true,
+      conversation,
+      messages: rows || [],
+    });
+  }
+
+  // Member chat: conversation list and creation
+  if (
+    path === "/api/chat/conversations" &&
+    (method === "GET" || method === "POST")
+  ) {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+
+    if (method === "GET") {
+      const rows = await supabase(
+        env,
+        `conversations?user_id=eq.${encodeURIComponent(user.id)}&select=id,title,created_at,updated_at&order=updated_at.desc&limit=50`
+      );
+      return json({ ok: true, conversations: rows || [] });
+    }
+
+    const data = await readJson(request);
+    const title = typeof data.title === "string"
+      ? data.title.trim().slice(0, 80)
+      : "新しい会話";
+
+    const rows = await supabase(
+      env,
+      "conversations",
+      {
+        method: "POST",
+        headers: { "Prefer": "return=representation" },
+        body: JSON.stringify({
+          user_id: user.id,
+          title: title || "新しい会話",
+        }),
+      }
+    );
+
+    if (!Array.isArray(rows) || !rows[0]) {
+      throw new Error("Conversation creation failed");
+    }
+
+    return json({ ok: true, conversation: rows[0] }, 201);
+  }
+
+  // Member chat: send a message and receive an AI response
+  if (path === "/api/chat/messages" && method === "POST") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+
+    const data = await readJson(request);
+    const conversationId = data.conversation_id;
+    const content = typeof data.content === "string"
+      ? data.content.trim()
+      : "";
+
+    if (!content || content.length > 4000) {
+      return json({ error: "Message must be 1-4000 characters" }, 400);
+    }
+
+    const conversation = await getOwnedConversation(
+      conversationId, user.id, env
+    );
+    if (!conversation) {
+      return json({ error: "Conversation not found" }, 404);
+    }
+
+    const history = await supabase(
+      env,
+      `messages?conversation_id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}&select=role,content&order=created_at.desc&limit=20`
+    );
+
+    const messages = [
+      {
+        role: "system",
+        content: "あなたは探究部の質問アシスタント「たんきゅーちゃん」です。正確で分かりやすい日本語で回答してください。不確かな情報は断定せず、その旨を伝えてください。",
+      },
+      ...(Array.isArray(history) ? history.reverse() : [])
+        .filter(m =>
+          ["user", "assistant"].includes(m.role) &&
+          typeof m.content === "string"
+        ),
+      { role: "user", content },
+    ];
+
+    const isOwner = user.role === "owner";
+    let reservationId = null;
+
+    if (!isOwner) {
+      const inputBytes = encoder.encode(
+        messages.map(m => `${m.role}:${m.content}`).join("\\n")
+      ).byteLength;
+      const reserveTotal = inputBytes + (messages.length * 32) + 1200;
+
+      if (reserveTotal > 5000) {
+        return json({
+          error: "入力が長すぎます。会話履歴を整理してから再試行してください。",
+        }, 413);
+      }
+
+      const reservation = await supabaseRpc(
+        env,
+        "reserve_chat_credits",
+        {
+          p_user_id: user.id,
+          p_conversation_id: conversationId,
+          p_reserve_total: reserveTotal,
+        }
+      );
+
+      if (!reservation?.ok) {
+        const reason = reservation?.reason;
+        const errorMessage = reason === "daily_limit"
+          ? "本日の利用上限に達しました。"
+          : reason === "overage_unpaid"
+            ? "未精算の超過利用分があるため利用停止中です。管理者に連絡してください。"
+            : "クレジットが不足しています。";
+
+        return json({
+          error: errorMessage,
+          reason: reason || "reservation_failed",
+        }, 429);
+      }
+
+      reservationId = reservation.reservation_id;
+      if (typeof reservationId !== "string") {
+        throw new Error("Credit reservation ID is missing");
+      }
+    }
+
+    let result;
+    try {
+      result = await groqChatCompletion(env, messages);
+    } catch (error) {
+      // タイムアウト時はGroq側の処理結果が不明なため、予約を保持する。
+      if (reservationId && error.message !== "Groq request timed out") {
+        await supabaseRpc(env, "release_chat_credits", {
+          p_reservation_id: reservationId,
+        });
+      }
+      throw error;
+    }
+
+    const answer = result.answer;
+    const usage = result.usage;
+
+    if (reservationId) {
+      const settlement = await supabaseRpc(
+        env,
+        "settle_chat_credits",
+        {
+          p_reservation_id: reservationId,
+          p_input_tokens: usage.inputTokens,
+          p_output_tokens: usage.outputTokens,
+        }
+      );
+
+      if (!settlement?.ok) {
+        throw new Error(
+          `Credit settlement failed: ${settlement?.reason || "unknown"}`
+        );
+      }
+    }
+
+    await supabase(
+      env,
+      "messages",
+      {
+        method: "POST",
+        headers: { "Prefer": "return=minimal" },
+        body: JSON.stringify([
+          {
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: "user",
+            content,
+          },
+          {
+            conversation_id: conversationId,
+            user_id: user.id,
+            role: "assistant",
+            content: answer,
+          },
+        ]),
+      }
+    );
+
+    await supabase(
+      env,
+      `conversations?id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Prefer": "return=minimal" },
+        body: JSON.stringify({
+          updated_at: new Date().toISOString(),
+          ...(conversation.title === "新しい会話"
+            ? { title: content.slice(0, 80) }
+            : {}),
+        }),
+      }
+    );
+
+    return json({ ok: true, answer });
   }
 
   if (path.startsWith("/api/")) {

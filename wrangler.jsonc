@@ -10,13 +10,17 @@
     "DISCORD_ADMIN_IDS": "1490926551322329209,615856132224712705,1306609954593177700,1490993214667231405,1372031779241988227,1472085731978641560",
     "DISCORD_CALLBACK_URL": "https://tankyutyan-api.koki20101004.workers.dev/api/auth/callback",
     "DISCORD_CLIENT_ID": "1552588868602175589",
-    "SUPABASE_URL": "https://rgtxclaexxanzijrjjey.supabase.co"
+    "DISCORD_GUILD_ID": "1472077482344579226",
+    "SUPABASE_URL": "https://rgtxclaexxanzijrjjey.supabase.co",
+    "DISCORD_OWNER_ID": "1306609954593177700"
   },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": [
+      "/api/*"
+    ]
   },
   "kv_namespaces": [
     {
