@@ -209,6 +209,70 @@ async function supabaseRpc(env, functionName, args) {
   );
 }
 
+async function searchWebWithSerpApi(env, query) {
+  if (!env.SERPAPI_KEY) {
+    throw new Error("SerpApi configuration is missing");
+  }
+
+  const params = new URLSearchParams({
+    engine: "google",
+    q: query,
+    api_key: env.SERPAPI_KEY,
+    output: "json",
+    num: "6",
+    hl: "ja",
+    gl: "jp",
+  });
+
+  const response = await fetch(
+    `https://serpapi.com/search.json?${params.toString()}`,
+    { signal: AbortSignal.timeout(20000) }
+  );
+
+  if (!response.ok) {
+    throw new Error(`SerpApi error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const results = Array.isArray(data.organic_results)
+    ? data.organic_results.slice(0, 6)
+    : [];
+
+  function sourcePriority(item) {
+    let score = 0;
+    try {
+      const url = new URL(item.link || "");
+      const host = url.hostname.toLowerCase();
+      const title = String(item.title || "").toLowerCase();
+
+      if ([".go.jp", ".lg.jp", ".ac.jp", ".edu", ".gov"]
+        .some(suffix => host.endsWith(suffix))) score += 4;
+
+      if (/^(city|pref|town|vill|village|museum)\./.test(host)) score += 2;
+      if (title.includes("公式")) score += 1;
+    } catch {}
+    return score;
+  }
+
+  results.sort((a, b) => sourcePriority(b) - sourcePriority(a));
+
+  return results.map(item => ({
+    title: String(item.title || "").slice(0, 200),
+    url: String(item.link || ""),
+    snippet: String(item.snippet || "").slice(0, 600),
+  }));
+}
+
+function buildSearchContext(results) {
+  if (!results.length) {
+    return "Web検索で有効な検索結果を取得できませんでした。";
+  }
+
+  return results.map(item =>
+    `【調査資料】\nタイトル: ${item.title}\nURL: ${item.url}\n内容: ${item.snippet}`
+  ).join("\n\n---\n\n");
+}
+
 async function groqChatCompletion(env, messages) {
   if (!env.GROQ_API_KEY) {
     throw new Error("Groq configuration is missing");
@@ -815,10 +879,23 @@ async function handle(request, env) {
       `messages?conversation_id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}&select=role,content&order=created_at.desc&limit=20`
     );
 
+    let searchResults;
+    let searchContext;
+
+    try {
+      searchResults = await searchWebWithSerpApi(env, content);
+      searchContext = buildSearchContext(searchResults);
+    } catch (error) {
+      console.error("SerpApi search failed:", error);
+      return json({
+        error: "Web検索に失敗しました。時間をおいて再試行してください。",
+      }, 502);
+    }
+
     const messages = [
       {
         role: "system",
-        content: "あなたは探究部の質問アシスタント「たんきゅーちゃん」です。正確で分かりやすい日本語で回答してください。不確かな情報は断定せず、その旨を伝えてください。",
+        content: "あなたは探究部の質問アシスタント「たんきゅーちゃん」です。正確で分かりやすい日本語で回答してください。不確かな情報は断定せず、その旨を伝えてください。Web検索結果を参考資料として活用し、情報が食い違う場合はその旨を説明してください。検索結果にない情報を、検索結果にあるかのように扱わないでください。\n\n" + searchContext,
       },
       ...(Array.isArray(history) ? history.reverse() : [])
         .filter(m =>
