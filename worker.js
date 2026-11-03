@@ -351,6 +351,102 @@ async function groqChatCompletion(env, messages) {
   };
 }
 
+
+async function cloudflareAIChatCompletion(env, messages) {
+  if (!env.AI || typeof env.AI.run !== "function") {
+    throw new Error("Workers AI binding is missing");
+  }
+
+  let data;
+  try {
+    data = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
+      messages,
+      max_completion_tokens: 1200,
+      temperature: 0.6,
+    });
+  } catch (error) {
+    const wrapped = new Error(
+      `Workers AI request failed: ${error?.message || String(error)}`
+    );
+    wrapped.status = error?.status ?? error?.cause?.status;
+    wrapped.code = error?.code ?? error?.cause?.code;
+    wrapped.cause = error;
+
+    if (
+      error?.name === "AbortError" ||
+      /timed? ?out|timeout|deadline exceeded/i.test(wrapped.message)
+    ) {
+      wrapped.preserveReservation = true;
+    }
+
+    throw wrapped;
+  }
+
+  const content = data?.response;
+  const rawUsage = data?.usage;
+
+  if (typeof content !== "string" || !content.trim()) {
+    const error = new Error("Workers AI returned an empty response");
+    error.preserveReservation = true;
+    throw error;
+  }
+
+  const usage = {
+    inputTokens: rawUsage?.prompt_tokens,
+    outputTokens: rawUsage?.completion_tokens,
+    totalTokens: rawUsage?.total_tokens,
+  };
+
+  if (
+    !Number.isSafeInteger(usage.inputTokens) ||
+    !Number.isSafeInteger(usage.outputTokens) ||
+    !Number.isSafeInteger(usage.totalTokens) ||
+    usage.inputTokens < 0 ||
+    usage.outputTokens < 0 ||
+    usage.totalTokens !== usage.inputTokens + usage.outputTokens
+  ) {
+    const error = new Error("Workers AI usage data is missing or invalid");
+    error.preserveReservation = true;
+    throw error;
+  }
+
+  return {
+    answer: content.trim(),
+    usage,
+  };
+}
+
+function isWorkersAIRetryableError(error) {
+  const status = Number(error?.status);
+  const code = String(error?.code ?? "");
+  const message = String(error?.message ?? "");
+
+  return (
+    status === 429 ||
+    (status >= 500 && status <= 599) ||
+    code === "3036" ||
+    code === "3040" ||
+    /\b(3036|3040)\b/.test(message)
+  );
+}
+
+async function chatCompletionWithFallback(env, messages) {
+  try {
+    return await cloudflareAIChatCompletion(env, messages);
+  } catch (error) {
+    if (!isWorkersAIRetryableError(error)) {
+      throw error;
+    }
+
+    console.warn(
+      "Workers AI temporarily unavailable; switching to Groq:",
+      error.message
+    );
+
+    return await groqChatCompletion(env, messages);
+  }
+}
+
 async function getOwnedConversation(conversationId, userId, env) {
   if (
     typeof conversationId !== "string" ||
@@ -1089,10 +1185,14 @@ async function handle(request, env) {
 
     let result;
     try {
-      result = await groqChatCompletion(env, messages);
+      result = await chatCompletionWithFallback(env, messages);
     } catch (error) {
-      // タイムアウト時はGroq側の処理結果が不明なため、予約を保持する。
-      if (reservationId && error.message !== "Groq request timed out") {
+      // 処理結果や使用量が不明な場合は、クレジット予約を保持する。
+      if (
+        reservationId &&
+        !error.preserveReservation &&
+        error.message !== "Groq request timed out"
+      ) {
         await supabaseRpc(env, "release_chat_credits", {
           p_reservation_id: reservationId,
         });
