@@ -171,6 +171,13 @@ async function requireAgent(request, env) {
     safeEqual(supplied, env.AGENT_SECRET);
 }
 
+function shouldSearchWeb(query) {
+  const text = query.trim().toLowerCase();
+  if (!text) return false;
+  if (text.length <= 20 && /^(やあ|こんにちは|こんばんは|おはよう|おはよ|おっす|どうも|お疲れ|おつかれ|ありがとう|ありがと|thx|thanks|hello|hi|hey|おやすみ|またね|ばいばい|bye)[！!。,.、〜~\s]*$/.test(text)) return false;
+  return true;
+}
+
 async function supabase(env, path, options = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("Supabase configuration is missing");
@@ -670,6 +677,28 @@ async function handle(request, env) {
         cookie(STATE_COOKIE, "", 0));
     }
 
+    const loginTime = new Date().toISOString();
+    try {
+      await supabase(env, "user_profiles?on_conflict=user_id", {
+        method: "POST",
+        headers: {
+          Prefer: "resolution=merge-duplicates,return=minimal",
+        },
+        body: JSON.stringify({
+          user_id: user.id,
+          username: user.username,
+          global_name: user.global_name || null,
+          avatar: user.avatar || null,
+          last_login_at: loginTime,
+          updated_at: loginTime,
+        }),
+      });
+    } catch (error) {
+      console.error("Failed to save Discord user profile:", error);
+      return redirect(`${appOrigin}/?login=failed`,
+        cookie(STATE_COOKIE, "", 0));
+    }
+
     const session = await makeSession(user, env);
     const headers = new Headers({
       Location: appOrigin,
@@ -879,17 +908,20 @@ async function handle(request, env) {
       `messages?conversation_id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}&select=role,content&order=created_at.desc&limit=20`
     );
 
-    let searchResults;
     let searchContext;
 
-    try {
-      searchResults = await searchWebWithSerpApi(env, content);
-      searchContext = buildSearchContext(searchResults);
-    } catch (error) {
-      console.error("SerpApi search failed:", error);
-      return json({
-        error: "Web検索に失敗しました。時間をおいて再試行してください。",
-      }, 502);
+    if (shouldSearchWeb(content)) {
+      try {
+        const searchResults = await searchWebWithSerpApi(env, content);
+        searchContext = buildSearchContext(searchResults);
+      } catch (error) {
+        console.error("SerpApi search failed:", error);
+        return json({
+          error: "Web検索に失敗しました。時間をおいて再試行してください。",
+        }, 502);
+      }
+    } else {
+      searchContext = "今回は挨拶や雑談のため、Web検索は実行していません。自然で短い会話として返答してください。言葉の意味や辞書的な解説に勝手に脱線しないでください。";
     }
 
     const messages = [
