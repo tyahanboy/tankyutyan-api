@@ -715,6 +715,111 @@ async function handle(request, env) {
       : json({ authenticated: false }, 401);
   }
 
+  // Owner-only: list all logged-in members and their credit balances
+  if (path === "/api/admin/credits" && method === "GET") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+    if (user.role !== "owner") {
+      return json({ error: "Forbidden" }, 403);
+    }
+
+    const [profiles, creditRows] = await Promise.all([
+      supabase(
+        env,
+        "user_profiles?select=user_id,username,global_name,avatar,first_login_at,last_login_at&order=last_login_at.desc&limit=1000"
+      ),
+      supabase(
+        env,
+        "user_chat_credits?select=user_id,daily_limit,monthly_limit,daily_used,monthly_used,daily_period,monthly_period,bonus_credits,overage_credits&limit=1000"
+      ),
+    ]);
+
+    const creditMap = new Map(
+      (creditRows || []).map(row => [row.user_id, row])
+    );
+
+    const today = new Date().toISOString().slice(0, 10);
+    const monthStart = `${today.slice(0, 7)}-01`;
+
+    const members = (profiles || []).map(profile => {
+      const row = creditMap.get(profile.user_id);
+      const dailyLimit = row?.daily_limit ?? 5000;
+      const monthlyLimit = row?.monthly_limit ?? 100000;
+      const dailyUsed = row?.daily_period === today
+        ? (row.daily_used ?? 0) : 0;
+      const monthlyUsed = row?.monthly_period === monthStart
+        ? (row.monthly_used ?? 0) : 0;
+
+      return {
+        ...profile,
+        credits: {
+          daily_limit: dailyLimit,
+          daily_used: dailyUsed,
+          daily_remaining: Math.max(0, dailyLimit - dailyUsed),
+          monthly_limit: monthlyLimit,
+          monthly_used: monthlyUsed,
+          monthly_remaining: Math.max(0, monthlyLimit - monthlyUsed),
+          bonus_credits: row?.bonus_credits ?? 0,
+          overage_credits: row?.overage_credits ?? 0,
+        },
+      };
+    });
+
+    return json({ ok: true, members }, 200, {
+      "Cache-Control": "no-store",
+    });
+  }
+
+  // Owner-only: add bonus credits to a logged-in member
+  if (path === "/api/admin/credits/grant" && method === "POST") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+    if (user.role !== "owner") {
+      return json({ error: "Forbidden" }, 403);
+    }
+
+    const data = await readJson(request);
+
+    if (!validUserId(data.user_id)) {
+      return json({ error: "Invalid user ID" }, 400);
+    }
+
+    if (
+      !Number.isSafeInteger(data.amount) ||
+      data.amount < 1 ||
+      data.amount > 1000000000
+    ) {
+      return json({ error: "Invalid credit amount" }, 400);
+    }
+
+    const targets = await supabase(
+      env,
+      `user_profiles?user_id=eq.${encodeURIComponent(data.user_id)}&select=user_id&limit=1`
+    );
+
+    if (!targets?.length) {
+      return json({ error: "Member not found" }, 404);
+    }
+
+    const result = await supabaseRpc(
+      env,
+      "admin_add_bonus_credits",
+      {
+        p_target_user_id: data.user_id,
+        p_amount: data.amount,
+        p_admin_user_id: user.id,
+      }
+    );
+
+    if (!result?.ok) {
+      return json({ error: "Credit grant failed" }, 500);
+    }
+
+    return json(result, 200, {
+      "Cache-Control": "no-store",
+    });
+  }
+
   if (path === "/api/auth/logout" && method === "POST") {
     return new Response(JSON.stringify({ ok: true }), {
       headers: {
