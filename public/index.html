@@ -10,6 +10,66 @@
     <link rel="stylesheet" crossorigin href="/assets/index-7_ezEZB8.css">
   </head>
   <body>
+    <a href="/privacy.html"
+       style="position:fixed;top:12px;right:16px;z-index:99999;
+       padding:8px 12px;background:white;border:1px solid #dbeafe;
+       border-radius:10px;color:#4778c8;text-decoration:none;
+       font-size:12px;font-weight:600">
+      プライバシーポリシー
+    </a>
     <div id="root"></div>
+
+<style>
+  #privacy-gate[hidden] { display: none !important; }
+</style>
+<div id="privacy-gate" hidden
+     style="position:fixed;inset:0;z-index:100000;
+     display:flex;align-items:center;justify-content:center;
+     padding:16px;background:rgba(15,23,42,.72)">
+  <section style="width:min(850px,100%);height:min(850px,94vh);
+    background:white;border-radius:18px;padding:18px;
+    display:flex;flex-direction:column;gap:12px;
+    box-shadow:0 20px 60px #0004">
+    <div style="font-weight:800;color:#315d9d;font-size:18px">
+      プライバシーポリシーのご案内
+    </div>
+    <div style="font-size:13px;color:#64748b">
+      ご利用前に、情報の取り扱いについてご確認ください。
+    </div>
+    <iframe src="/privacy.html" title="プライバシーポリシー"
+      style="width:100%;flex:1;min-height:0;border:1px solid #e5ecf8;
+      border-radius:10px"></iframe>
+    <button id="privacy-close" type="button"
+      style="border:0;border-radius:12px;padding:13px;
+      background:#5b8def;color:white;font-weight:700;cursor:pointer">
+      内容を確認して閉じる
+    </button>
+    <div style="font-size:11px;text-align:center;color:#8291a8">
+      表示済み状態は、このブラウザ内に保存されます。
+    </div>
+  </section>
+</div>
+<script>
+(() => {
+  const key = "tankyutyan_privacy_seen_v1";
+  const gate = document.getElementById("privacy-gate");
+  const close = document.getElementById("privacy-close");
+
+  let seen = false;
+  try {
+    seen = localStorage.getItem(key) === "1";
+  } catch {}
+
+  if (!seen) gate.hidden = false;
+
+  close.addEventListener("click", () => {
+    try {
+      localStorage.setItem(key, "1");
+    } catch {}
+    gate.hidden = true;
+  });
+})();
+</script>
+
   </body>
 </html>
