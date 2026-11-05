@@ -299,7 +299,7 @@ async function groqChatCompletion(env, messages) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "openai/gpt-oss-120b",
+          model: "llama-3.1-8b-instant",
           messages,
           max_completion_tokens: 1200,
           temperature: 0.6,
