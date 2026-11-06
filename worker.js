@@ -863,9 +863,48 @@ async function handle(request, env) {
     });
   }
 
-  if (path.startsWith("/api/agent/")) {
+    if (path.startsWith("/api/agent/")) {
     if (!(await requireAgent(request, env))) {
       return json({ error: "Unauthorized" }, 401);
+    }
+
+    // ----------------------------------------------------
+    // 活動記録 (Activity Logs) エンドポイント
+    // ----------------------------------------------------
+    if (path === "/api/agent/activities" && method === "POST") {
+      const data = await readJson(request);
+      if (!validUserId(data.user_id) || typeof data.topic !== "string" || typeof data.content !== "string") {
+        return json({ error: "Invalid payload" }, 400);
+      }
+
+      const rows = await supabase(
+        env,
+        "activity_logs",
+        {
+          method: "POST",
+          headers: { "Prefer": "return=representation" },
+          body: JSON.stringify({
+            user_id: data.user_id,
+            user_name: typeof data.user_name === "string" ? data.user_name : null,
+            topic: data.topic.trim().slice(0, 500),
+            content: data.content.trim().slice(0, 4000),
+            next_step: typeof data.next_step === "string" ? data.next_step.trim().slice(0, 1000) : "",
+            created_at: new Date().toISOString(),
+          }),
+        }
+      );
+
+      return json({ ok: true, activity: Array.isArray(rows) ? rows[0] : null });
+    }
+
+    if (path === "/api/agent/activities" && method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      if (!validUserId(userId)) return json({ error: "Invalid user_id" }, 400);
+      const rows = await supabase(
+        env,
+        `activity_logs?user_id=eq.${encodeURIComponent(userId)}&select=id,user_id,user_name,topic,content,next_step,created_at&order=created_at.desc&limit=50`
+      );
+      return json({ ok: true, activities: rows || [] });
     }
 
     if (path === "/api/agent/status" && method === "POST") {
@@ -910,6 +949,19 @@ async function handle(request, env) {
 
 
   // Member chat: retrieve credit status
+  
+  // Webマイページ用：自分の活動記録一覧を取得
+  if (path === "/api/activities" && method === "GET") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+
+    const rows = await supabase(
+      env,
+      `activity_logs?user_id=eq.${encodeURIComponent(user.id)}&select=id,topic,content,next_step,created_at&order=created_at.desc&limit=50`
+    );
+    return json({ ok: true, activities: rows || [] });
+  }
+
   if (path === "/api/chat/credits" && method === "GET") {
     const user = await verifyMemberSession(request, env);
     if (!user) {
