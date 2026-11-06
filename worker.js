@@ -1016,6 +1016,11 @@ async function handle(request, env) {
 
   // Member chat: send a message and receive an AI response
   if (path === "/api/chat/messages" && method === "POST") {
+    const turnstileToken = request.headers.get("X-Turnstile-Token");
+    const isHuman = await verifyTurnstile(turnstileToken, request, env);
+    if (!isHuman) {
+      return json({ error: "Turnstile verification failed. Please check the human verification box." }, 400);
+    }
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
 

@@ -103,6 +103,7 @@
       .message { max-width: 92%; }
     }
   </style>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
   <header>
@@ -137,7 +138,10 @@
       <form class="composer" id="composer">
         <textarea id="input" maxlength="4000" placeholder="質問を入力してね…" required></textarea>
         <button id="send" type="submit">送信</button>
-      </form>
+      
+      <!-- Turnstile ウィジェット -->
+      <div class="cf-turnstile my-2" data-sitekey="0x4AAAAAAF15uOl7-kzQvwHU" data-theme="dark"></div>
+    </form>
     </section>
   </main>
 
@@ -150,8 +154,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: "same-origin",
     ...options,
-    headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    headers: { ...(options.body ? { "Content-Type": "application/json", "X-Turnstile-Token": (typeof turnstile !== "undefined" ? turnstile.getResponse() : "") } : {}),
       ...(options.headers || {})
     }
   });
