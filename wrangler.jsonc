@@ -12,7 +12,8 @@
     "DISCORD_CLIENT_ID": "1552588868602175589",
     "DISCORD_GUILD_ID": "1472077482344579226",
     "SUPABASE_URL": "https://rgtxclaexxanzijrjjey.supabase.co",
-    "DISCORD_OWNER_ID": "1306609954593177700"
+    "DISCORD_OWNER_ID": "1306609954593177700",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAF15uOl7-kzQvwHU"
   },
   "assets": {
     "directory": "./public",

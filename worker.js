@@ -528,6 +528,33 @@ function validStats(data) {
      Number.isFinite(Date.parse(data.updated_at)));
 }
 
+// Turnstile 検証ヘルパー関数
+async function verifyTurnstile(token, request, env) {
+  if (!token) return false;
+  const secret = env.TURNSTILE_SECRET_KEY;
+  if (!secret) {
+    console.error("TURNSTILE_SECRET_KEY is missing");
+    return false;
+  }
+  const ip = request.headers.get("CF-Connecting-IP") || "";
+  try {
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        secret: secret,
+        response: token,
+        remoteip: ip,
+      }),
+    });
+    const outcome = await res.json();
+    return outcome.success === true;
+  } catch (err) {
+    console.error("Turnstile verification error:", err);
+    return false;
+  }
+}
+
 async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
