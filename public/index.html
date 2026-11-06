@@ -9,6 +9,50 @@
     <script type="module" crossorigin src="/assets/index-8mOauX5A.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-7_ezEZB8.css">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const observer = new MutationObserver(() => {
+        const loginBtn = Array.from(document.querySelectorAll('button, a')).find(
+          el => el.textContent.includes('Discordでログイン') || (el.href && el.href.includes('/api/auth/discord'))
+        );
+
+        if (loginBtn && !document.getElementById('turnstile-wrapper')) {
+          const wrapper = document.createElement('div');
+          wrapper.id = 'turnstile-wrapper';
+          wrapper.style.margin = '16px 0';
+          wrapper.style.display = 'flex';
+          wrapper.style.justifyContent = 'center';
+
+          const widget = document.createElement('div');
+          widget.className = 'cf-turnstile';
+          widget.setAttribute('data-sitekey', '0x4AAAAAAF15uOl7-kzQvwHU');
+          widget.setAttribute('data-theme', 'dark');
+          wrapper.appendChild(widget);
+
+          loginBtn.parentNode.insertBefore(wrapper, loginBtn);
+
+          if (window.turnstile && typeof window.turnstile.render === 'function') {
+            try { window.turnstile.render(widget); } catch (e) {}
+          }
+
+          loginBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const token = window.turnstile ? window.turnstile.getResponse() : "";
+            if (!token) {
+              alert("人間チェック（Turnstile）を完了してください。");
+              return;
+            }
+            window.location.href = "/api/auth/discord?token=" + encodeURIComponent(token);
+          }, true);
+        }
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  </script>
 </head>
   <body>
     <a href="/privacy.html"
