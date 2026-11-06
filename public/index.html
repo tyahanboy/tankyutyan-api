@@ -120,17 +120,27 @@
 <script>
 (function() {
   function cleanUI() {
-    // 1. (時間計測は未実装) のテキストのみ除去
+    // 1. (時間計測は未実装) テキストの除去
     document.querySelectorAll('div, span, p').forEach(el => {
       if (el.children.length === 0 && el.textContent.includes('時間計測は未実装')) {
         el.textContent = el.textContent.replace(/\s*\([^)]*時間計測は未実装[^)]*\)/g, '');
       }
     });
 
-    // 2. 最下部の「開発モード」カードのみ非表示化
-    document.querySelectorAll('div').forEach(el => {
-      if (el.children.length < 5 && el.innerText && el.innerText.includes('開発モード') && el.innerText.includes('接続準備中')) {
+    // 2. 最下部の空欄ボックス（開発モードの残骸枠）を非表示化
+    document.querySelectorAll('div, section').forEach(el => {
+      const text = el.innerText ? el.innerText.trim() : '';
+      if (text.includes('開発モード') || text.includes('接続準備中')) {
         el.style.display = 'none';
+      }
+      // アイコンのみ残った空カード枠を非表示
+      if (el.children.length === 1 && el.querySelector('svg') && text === '') {
+        const parent = el.parentElement;
+        if (parent && parent.children.length === 1 && parent.innerText.trim() === '') {
+          parent.style.display = 'none';
+        } else {
+          el.style.display = 'none';
+        }
       }
     });
   }
@@ -145,18 +155,23 @@
       const activities = data.activities;
       const totalCount = activities.length;
 
-      // 「最近の活動」テキストを持つヘッダー要素を検索
-      const headers = Array.from(document.querySelectorAll('div, h2, h3, span'));
-      const activityHeader = headers.find(el => el.children.length === 0 && el.textContent.trim().includes('最近の活動'));
-      if (!activityHeader) return;
+      // 「まだ活動ログがないよ」が含まれる要素の全親枠を取得して置き換え
+      const allDivs = Array.from(document.querySelectorAll('div'));
+      const emptyTextNode = allDivs.find(d => d.children.length === 0 && d.textContent.includes('まだ活動ログがないよ'));
+      
+      let targetContainer = null;
+      if (emptyTextNode) {
+        // アイコンとテキストを含む親エリアを特定
+        let parent = emptyTextNode.parentElement;
+        while (parent && parent.parentElement && !parent.parentElement.innerText.includes('最近の活動')) {
+          parent = parent.parentElement;
+        }
+        targetContainer = parent;
+      } else {
+        targetContainer = allDivs.find(d => d.innerText && d.innerText.includes('/log 累計記録'));
+      }
 
-      // 「最近の活動」カード要素とその内部エリアを特定
-      const card = activityHeader.closest('div');
-      if (!card) return;
-
-      const contentArea = Array.from(card.querySelectorAll('div')).find(d => 
-        d.innerText && (d.innerText.includes('まだ活動ログがないよ') || d.innerText.includes('累計記録'))
-      ) || card;
+      if (!targetContainer) return;
 
       // 日付別利用回数を集計
       const countsByDate = {};
@@ -183,8 +198,9 @@
         `;
       }).join('');
 
-      contentArea.innerHTML = `
-        <div style="width: 100%; padding: 12px 8px; box-sizing: border-box;">
+      // 中身を丸ごとグラフ領域へ置換（デフォルト表示文言とアイコンを削除）
+      targetContainer.innerHTML = `
+        <div style="width: 100%; padding: 12px 8px 4px 8px; box-sizing: border-box;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <span style="font-size: 0.85rem; color: #9ca3af; font-weight: 500;">/log 累計記録</span>
             <span style="font-size: 1.2rem; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.75rem; font-weight: normal; color: #9ca3af;">回</span></span>
