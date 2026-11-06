@@ -116,5 +116,80 @@
 })();
 </script>
 
-  </body>
+  <!-- TANKYU_PATCH_START -->
+<script>
+(function() {
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function cleanUI() {
+    // 1. 「時間計測は未実装」のテキストを消去
+    document.querySelectorAll('div, span, p, h1, h2, h3').forEach(el => {
+      if (el.children.length === 0 && el.textContent.includes('時間計測は未実装')) {
+        el.textContent = el.textContent.replace(/\s*\([^)]*時間計測は未実装[^)]*\)/g, '');
+      }
+    });
+
+    // 2. 「開発モード」カードおよび残骸アイコン枠の非表示化
+    document.querySelectorAll('div').forEach(el => {
+      if (el.innerText && (el.innerText.includes('開発モード') || el.innerText.includes('接続準備中'))) {
+        el.style.display = 'none';
+      }
+      // アイコンのみ残った空カード枠を特定して非表示
+      if (el.children.length === 1 && el.querySelector('svg') && !el.innerText.trim()) {
+        const parent = el.parentElement;
+        if (parent && parent.children.length === 1 && !parent.innerText.trim()) {
+          parent.style.display = 'none';
+        }
+      }
+    });
+  }
+
+  async function loadActivities() {
+    try {
+      const res = await fetch('/api/activities');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.ok || !Array.isArray(data.activities) || data.activities.length === 0) return;
+
+      // 「まだ活動ログがないよ」を含むコンテナを取得
+      const allDivs = Array.from(document.querySelectorAll('div, section'));
+      const target = allDivs.find(d => d.innerText && d.innerText.includes('まだ活動ログがないよ'));
+      if (!target) return;
+
+      const itemsHtml = data.activities.map(act => `
+        <div style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 14px; margin-bottom: 10px; text-align: left;">
+          <div style="font-weight: bold; color: #818cf8; font-size: 1.05em;">📌 ${escapeHtml(act.topic)}</div>
+          <div style="margin-top: 6px; font-size: 0.95em; color: #e5e7eb; white-space: pre-wrap; line-height: 1.5;">${escapeHtml(act.content)}</div>
+          ${act.next_step ? `<div style="margin-top: 6px; font-size: 0.85em; color: #9ca3af; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 6px;">🔍 ${escapeHtml(act.next_step)}</div>` : ''}
+          <div style="font-size: 0.75em; color: #6b7280; margin-top: 8px; text-align: right;">${new Date(act.created_at).toLocaleString('ja-JP')}</div>
+        </div>
+      `).join('');
+
+      target.innerHTML = `
+        <div style="width: 100%;">
+          ${itemsHtml}
+        </div>
+      `;
+    } catch (e) {
+      console.error("Activities load error:", e);
+    }
+  }
+
+  function init() {
+    cleanUI();
+    loadActivities();
+    setInterval(cleanUI, 800);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
 </html>
