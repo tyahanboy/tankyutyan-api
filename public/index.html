@@ -119,33 +119,37 @@
   <!-- TANKYU_PATCH_START -->
 <script>
 (function() {
-  function cleanUI() {
-    // 1. (時間計測は未実装) テキストの除去
-    document.querySelectorAll('div, span, p').forEach(el => {
-      if (el.children.length === 0 && el.textContent.includes('時間計測は未実装')) {
-        el.textContent = el.textContent.replace(/\s*\([^)]*時間計測は未実装[^)]*\)/g, '');
+  function fixUI() {
+    // 1. 全テキストノードから (時間計測は未実装) を消去
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+    let node;
+    while (node = walker.nextNode()) {
+      if (node.nodeValue && node.nodeValue.includes('時間計測は未実装')) {
+        node.nodeValue = node.nodeValue.replace(/\s*\([^)]*時間計測は未実装[^)]*\)/g, '').replace(/\(時間計測は未実装\)/g, '');
       }
-    });
+    }
 
-    // 2. 最下部の空欄ボックス（開発モードの残骸枠）を非表示化
-    document.querySelectorAll('div, section').forEach(el => {
-      const text = el.innerText ? el.innerText.trim() : '';
-      if (text.includes('開発モード') || text.includes('接続準備中')) {
+    // 2. 最下部の開発モード枠を非表示
+    document.querySelectorAll('div').forEach(el => {
+      const txt = el.innerText || '';
+      if (el.children.length < 5 && (txt.includes('開発モード') || txt.includes('接続準備中'))) {
         el.style.display = 'none';
-      }
-      // アイコンのみ残った空カード枠を非表示
-      if (el.children.length === 1 && el.querySelector('svg') && text === '') {
-        const parent = el.parentElement;
-        if (parent && parent.children.length === 1 && parent.innerText.trim() === '') {
-          parent.style.display = 'none';
-        } else {
-          el.style.display = 'none';
-        }
       }
     });
   }
 
-  async function loadActivitiesChart() {
+  async function renderOnlyChart() {
+    if (document.getElementById('tankyu-pure-chart')) return;
+
+    // 「最近の活動」テキストを持つヘッダー要素を検索
+    const allElements = Array.from(document.querySelectorAll('div, span, h2, h3'));
+    const headerNode = allElements.find(d => d.children.length === 0 && d.textContent.trim() === '最近の活動');
+    if (!headerNode) return;
+
+    // 「最近の活動」カードの外枠コンテナを取得
+    const mainCard = headerNode.closest('div[class*="card"], div[class*="bg-"], div');
+    if (!mainCard) return;
+
     try {
       const res = await fetch('/api/activities');
       if (!res.ok) return;
@@ -155,25 +159,6 @@
       const activities = data.activities;
       const totalCount = activities.length;
 
-      // 「まだ活動ログがないよ」が含まれる要素の全親枠を取得して置き換え
-      const allDivs = Array.from(document.querySelectorAll('div'));
-      const emptyTextNode = allDivs.find(d => d.children.length === 0 && d.textContent.includes('まだ活動ログがないよ'));
-      
-      let targetContainer = null;
-      if (emptyTextNode) {
-        // アイコンとテキストを含む親エリアを特定
-        let parent = emptyTextNode.parentElement;
-        while (parent && parent.parentElement && !parent.parentElement.innerText.includes('最近の活動')) {
-          parent = parent.parentElement;
-        }
-        targetContainer = parent;
-      } else {
-        targetContainer = allDivs.find(d => d.innerText && d.innerText.includes('/log 累計記録'));
-      }
-
-      if (!targetContainer) return;
-
-      // 日付別利用回数を集計
       const countsByDate = {};
       activities.forEach(act => {
         const d = act.created_at ? new Date(act.created_at).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : '今日';
@@ -190,7 +175,7 @@
         return `
           <div style="display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0;">
             <span style="font-size: 0.75rem; color: #a5b4fc; margin-bottom: 4px; font-weight: 600;">${count}回</span>
-            <div style="width: 100%; max-width: 28px; background: rgba(255, 255, 255, 0.06); height: 80px; border-radius: 6px; display: flex; align-items: flex-end; padding: 2px; box-sizing: border-box;">
+            <div style="width: 100%; max-width: 28px; background: rgba(255, 255, 255, 0.06); height: 85px; border-radius: 6px; display: flex; align-items: flex-end; padding: 2px; box-sizing: border-box;">
               <div style="width: 100%; height: ${heightPct}%; background: linear-gradient(180deg, #818cf8 0%, #4f46e5 100%); border-radius: 4px;"></div>
             </div>
             <span style="font-size: 0.7rem; color: #9ca3af; margin-top: 6px;">${d}</span>
@@ -198,33 +183,38 @@
         `;
       }).join('');
 
-      // 中身を丸ごとグラフ領域へ置換（デフォルト表示文言とアイコンを削除）
-      targetContainer.innerHTML = `
-        <div style="width: 100%; padding: 12px 8px 4px 8px; box-sizing: border-box;">
+      // 元の「最近の活動」枠と初期文言・アイコンを丸ごと消し、グラフ領域のみに置き換え
+      mainCard.id = 'tankyu-pure-chart';
+      mainCard.style.padding = '16px';
+      mainCard.innerHTML = `
+        <div style="width: 100%; box-sizing: border-box;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <span style="font-size: 0.85rem; color: #9ca3af; font-weight: 500;">/log 累計記録</span>
-            <span style="font-size: 1.2rem; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.75rem; font-weight: normal; color: #9ca3af;">回</span></span>
+            <span style="font-size: 0.9rem; color: #a5b4fc; font-weight: 600;">/log 記録回数</span>
+            <span style="font-size: 1.25rem; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.75rem; font-weight: normal; color: #9ca3af;">回</span></span>
           </div>
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; height: 110px;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; height: 115px;">
             ${barsHtml}
           </div>
         </div>
       `;
     } catch (e) {
-      console.error("Activities chart error:", e);
+      console.error(e);
     }
   }
 
-  function init() {
-    cleanUI();
-    loadActivitiesChart();
-    setInterval(cleanUI, 1000);
+  function updateAll() {
+    fixUI();
+    renderOnlyChart();
   }
 
+  const observer = new MutationObserver(updateAll);
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+  setInterval(updateAll, 500);
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', updateAll);
   } else {
-    init();
+    updateAll();
   }
 })();
 </script>
