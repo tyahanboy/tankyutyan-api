@@ -120,15 +120,16 @@
 <script>
 (function() {
   function cleanUI() {
-    // 1. 時間計測は未実装の表記を消去
-    document.querySelectorAll('div, span, p, h1, h2, h3').forEach(el => {
+    // 1. (時間計測は未実装) のテキストのみ除去
+    document.querySelectorAll('div, span, p').forEach(el => {
       if (el.children.length === 0 && el.textContent.includes('時間計測は未実装')) {
         el.textContent = el.textContent.replace(/\s*\([^)]*時間計測は未実装[^)]*\)/g, '');
       }
     });
-    // 2. 開発モードカードの非表示
+
+    // 2. 最下部の「開発モード」カードのみ非表示化
     document.querySelectorAll('div').forEach(el => {
-      if (el.innerText && (el.innerText.includes('開発モード') || el.innerText.includes('接続準備中'))) {
+      if (el.children.length < 5 && el.innerText && el.innerText.includes('開発モード') && el.innerText.includes('接続準備中')) {
         el.style.display = 'none';
       }
     });
@@ -144,11 +145,20 @@
       const activities = data.activities;
       const totalCount = activities.length;
 
-      const allDivs = Array.from(document.querySelectorAll('div, section'));
-      const target = allDivs.find(d => d.innerText && (d.innerText.includes('まだ活動ログがないよ') || d.innerText.includes('利用回数') || d.innerText.includes('活動記録')));
-      if (!target) return;
+      // 「最近の活動」テキストを持つヘッダー要素を検索
+      const headers = Array.from(document.querySelectorAll('div, h2, h3, span'));
+      const activityHeader = headers.find(el => el.children.length === 0 && el.textContent.trim().includes('最近の活動'));
+      if (!activityHeader) return;
 
-      // 日付ごとの利用回数を集計
+      // 「最近の活動」カード要素とその内部エリアを特定
+      const card = activityHeader.closest('div');
+      if (!card) return;
+
+      const contentArea = Array.from(card.querySelectorAll('div')).find(d => 
+        d.innerText && (d.innerText.includes('まだ活動ログがないよ') || d.innerText.includes('累計記録'))
+      ) || card;
+
+      // 日付別利用回数を集計
       const countsByDate = {};
       activities.forEach(act => {
         const d = act.created_at ? new Date(act.created_at).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : '今日';
@@ -161,25 +171,25 @@
 
       const barsHtml = dates.map(d => {
         const count = countsByDate[d] || 0;
-        const heightPct = Math.max(12, Math.round((count / maxCount) * 100));
+        const heightPct = Math.max(15, Math.round((count / maxCount) * 100));
         return `
-          <div style="display: flex; flex-direction: column; align-items: center; flex: 1;">
-            <span style="font-size: 0.7em; color: #a5b4fc; margin-bottom: 4px;">${count}回</span>
-            <div style="width: 100%; max-width: 26px; background: rgba(99, 102, 241, 0.15); height: 70px; border-radius: 6px; display: flex; align-items: flex-end; overflow: hidden; padding: 2px;">
+          <div style="display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0;">
+            <span style="font-size: 0.75rem; color: #a5b4fc; margin-bottom: 4px; font-weight: 600;">${count}回</span>
+            <div style="width: 100%; max-width: 28px; background: rgba(255, 255, 255, 0.06); height: 80px; border-radius: 6px; display: flex; align-items: flex-end; padding: 2px; box-sizing: border-box;">
               <div style="width: 100%; height: ${heightPct}%; background: linear-gradient(180deg, #818cf8 0%, #4f46e5 100%); border-radius: 4px;"></div>
             </div>
-            <span style="font-size: 0.65em; color: #9ca3af; margin-top: 6px;">${d}</span>
+            <span style="font-size: 0.7rem; color: #9ca3af; margin-top: 6px;">${d}</span>
           </div>
         `;
       }).join('');
 
-      target.innerHTML = `
-        <div style="width: 100%; text-align: center; padding: 4px 0;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding: 0 4px;">
-            <span style="font-size: 0.85em; color: #9ca3af;">/log 記録回数</span>
-            <span style="font-size: 1.3em; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.7em; font-weight: normal; color: #9ca3af;">回</span></span>
+      contentArea.innerHTML = `
+        <div style="width: 100%; padding: 12px 8px; box-sizing: border-box;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <span style="font-size: 0.85rem; color: #9ca3af; font-weight: 500;">/log 累計記録</span>
+            <span style="font-size: 1.2rem; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.75rem; font-weight: normal; color: #9ca3af;">回</span></span>
           </div>
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 6px; height: 105px; padding: 4px 0;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; height: 110px;">
             ${barsHtml}
           </div>
         </div>
