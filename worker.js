@@ -584,6 +584,11 @@ async function handle(request, env) {
   }
 
   if (path === "/api/auth/discord" && method === "GET") {
+    const token = url.searchParams.get("token") || url.searchParams.get("cf-turnstile-response");
+    const isHuman = await verifyTurnstile(token, request, env);
+    if (!isHuman) {
+      return new Response("認証エラー: 人間チェック（Turnstile）を完了してください。", { status: 400, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    }
     const stateBytes = crypto.getRandomValues(new Uint8Array(32));
     const state = base64url(stateBytes);
 
@@ -1016,11 +1021,6 @@ async function handle(request, env) {
 
   // Member chat: send a message and receive an AI response
   if (path === "/api/chat/messages" && method === "POST") {
-    const turnstileToken = request.headers.get("X-Turnstile-Token");
-    const isHuman = await verifyTurnstile(turnstileToken, request, env);
-    if (!isHuman) {
-      return json({ error: "Turnstile verification failed. Please check the human verification box." }, 400);
-    }
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
 
