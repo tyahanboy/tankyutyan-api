@@ -1074,183 +1074,127 @@ async function handle(request, env) {
   // Member chat: send a message and receive an AI response
   if (path === "/api/chat/messages" && method === "POST") {
     try {
-    /* CHAT_DEBUG_TRY */ try {
-    const user = await verifyMemberSession(request, env);
-    if (!user) return json({ error: "Unauthorized" }, 401);
+      const user = await verifyMemberSession(request, env);
+      if (!user) return json({ error: "Unauthorized" }, 401);
 
-    const data = await readJson(request);
-    const conversationId = data.conversation_id;
-    const content = typeof data.content === "string"
-      ? data.content.trim()
-      : "";
+      const data = await readJson(request);
+      const conversationId = data.conversation_id;
+      const content_text = typeof data.content === "string" ? data.content.trim() : "";
 
-    if (!content || content.length > 4000) {
-      return json({ error: "Message must be 1-4000 characters" }, 400);
-    }
-
-    const conversation = await getOwnedConversation(
-      conversationId, user.id, env
-    );
-    if (!conversation) {
-      return json({ error: "Conversation not found" }, 404);
-    }
-
-    const history = await supabase(
-      env,
-      `messages?conversation_id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}&select=role,content&order=created_at.desc&limit=20`
-    );
-
-    let searchContext;
-
-    if (shouldSearchWeb(content)) {
-      try {
-        const searchResults = await searchWebWithSerpApi(env, content);
-        searchContext = buildSearchContext(searchResults);
-      } catch (error) {
-        console.error("SerpApi search failed:", error);
-        return json({
-          error: "Web検索に失敗しました。時間をおいて再試行してください。",
-        }, 502);
-      }
-    } else {
-      searchContext = "今回は挨拶や雑談のため、Web検索は実行していません。自然で短い会話として返答してください。言葉の意味や辞書的な解説に勝手に脱線しないでください。";
-    }
-
-    const messages = [
-      {
-        role: "system",
-        content: "あなたは探究部の質問アシスタント「たんきゅーちゃん」です。正確で分かりやすい日本語で回答してください。不確かな情報は断定せず、その旨を伝えてください。Web検索結果を参考資料として活用し、情報が食い違う場合はその旨を説明してください。検索結果にない情報を、検索結果にあるかのように扱わないでください。\n\n設定された最大出力トークン数を超えそうな場合は、あらかじめ回答を簡潔に調整してください。重要な結論と根拠を優先し、不要な説明や重複を省いてください。文章の途中で唐突に終了せず、自然な文章として最後まで完結させてください。\n\n基本は自然な会話形式で、読者に語りかけるように説明してください。最初に結論や概要を示し、その後に理由、仕組み、具体例を順番に説明してください。検索結果をそのまま羅列するのではなく、情報を整理して分かりやすい文章にまとめてください。表は複数の項目を比較するときなど、理解に役立つ場合だけ使用してください。専門用語や数値は、何を意味するのかも簡潔に説明してください。見出しや箇条書きを使いすぎず、説明の流れを大切にしてください。情報源は説明の根拠として活用し、必要に応じてURLを示してください。\n\n" + searchContext,
-      },
-      ...(Array.isArray(history) ? history.reverse() : [])
-        .filter(m =>
-          ["user", "assistant"].includes(m.role) &&
-          typeof m.content === "string"
-        ),
-      { role: "user", content },
-    ];
-
-    const isOwner = user.role === "owner";
-    let reservationId = null;
-
-    if (!isOwner) {
-      const inputBytes = encoder.encode(
-        messages.map(m => `${m.role}:${m.content}`).join("\\n")
-      ).byteLength;
-      const reserveTotal = inputBytes + (messages.length * 32) + 1200;
-
-      if (reserveTotal > 5000) {
-        return json({
-          error: "入力が長すぎます。会話履歴を整理してから再試行してください。",
-        }, 413);
+      if (!content_text || content_text.length > 4000) {
+        return json({ error: "Message must be 1-4000 characters" }, 400);
       }
 
-      const reservation = await supabaseRpc(
+      const conversation = await getOwnedConversation(conversationId, user.id, env);
+      if (!conversation) {
+        return json({ error: "Conversation not found" }, 404);
+      }
+
+      const history = await supabase(
         env,
-        "reserve_chat_credits",
+        `messages?conversation_id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}&select=role,content&order=created_at.desc&limit=20`
+      );
+
+      let searchContext;
+      if (shouldSearchWeb(content_text)) {
+        try {
+          const searchResults = await searchWebWithSerpApi(env, content_text);
+          searchContext = buildSearchContext(searchResults);
+        } catch (error) {
+          console.error("SerpApi search failed:", error);
+          return json({ error: "Web検索に失敗しました。時間をおいて再試行してください。" }, 502);
+        }
+      } else {
+        searchContext = "今回は挨拶や雑談のため、Web検索は実行していません。自然で短い会話として返答してください。";
+      }
+
+      const messages = [
         {
+          role: "system",
+          content: "あなたは探究部の質問アシスタント「たんきゅーちゃん」です。正確で分かりやすい日本語で回答してください。\n\n" + searchContext,
+        },
+        ...(Array.isArray(history) ? history.reverse() : [])
+          .filter(m => ["user", "assistant"].includes(m.role) && typeof m.content === "string"),
+        { role: "user", content: content_text },
+      ];
+
+      const isOwner = user.role === "owner";
+      let reservationId = null;
+
+      if (!isOwner) {
+        const inputBytes = encoder.encode(messages.map(m => `${m.role}:${m.content}`).join("\n")).byteLength;
+        const reserveTotal = inputBytes + (messages.length * 32) + 1200;
+
+        if (reserveTotal > 5000) {
+          return json({ error: "入力が長すぎます。会話履歴を整理してから再試行してください。" }, 413);
+        }
+
+        const reservation = await supabaseRpc(env, "reserve_chat_credits", {
           p_user_id: user.id,
           p_conversation_id: conversationId,
           p_reserve_total: reserveTotal,
-        }
-      );
-
-      if (!reservation?.ok) {
-        const reason = reservation?.reason;
-        const errorMessage = reason === "daily_limit"
-          ? "本日の利用上限に達しました。"
-          : reason === "overage_unpaid"
-            ? "未精算の超過利用分があるため利用停止中です。管理者に連絡してください。"
-            : "クレジットが不足しています。";
-
-        return json({
-          error: errorMessage,
-          reason: reason || "reservation_failed",
-        }, 429);
-      }
-
-      reservationId = reservation.reservation_id;
-      if (typeof reservationId !== "string") {
-        throw new Error("Credit reservation ID is missing");
-      }
-    }
-
-    let result;
-    try {
-      result = await groqChatCompletion(env, messages);
-    } catch (error) {
-      // 処理結果や使用量が不明な場合は、クレジット予約を保持する。
-      if (
-        reservationId &&
-        !error.preserveReservation &&
-        error.message !== "Groq request timed out"
-      ) {
-        await supabaseRpc(env, "release_chat_credits", {
-          p_reservation_id: reservationId,
         });
+
+        if (!reservation?.ok) {
+          const reason = reservation?.reason;
+          const errorMessage = reason === "daily_limit"
+            ? "本日の利用上限に達しました。"
+            : reason === "overage_unpaid"
+              ? "未精算の超過利用分があるため利用停止中です。"
+              : "クレジットが不足しています。";
+          return json({ error: errorMessage, reason: reason || "reservation_failed" }, 429);
+        }
+
+        reservationId = reservation.reservation_id;
       }
-      throw error;
-    }
 
-    const answer = result.answer;
-    const usage = result.usage;
+      let result;
+      try {
+        result = await groqChatCompletion(env, messages);
+      } catch (error) {
+        if (reservationId && !error.preserveReservation && error.message !== "Groq request timed out") {
+          await supabaseRpc(env, "release_chat_credits", { p_reservation_id: reservationId });
+        }
+        throw error;
+      }
 
-    if (reservationId) {
-      const settlement = await supabaseRpc(
-        env,
-        "settle_chat_credits",
-        {
+      const answer = result.answer;
+      const usage = result.usage;
+
+      if (reservationId) {
+        const settlement = await supabaseRpc(env, "settle_chat_credits", {
           p_reservation_id: reservationId,
           p_input_tokens: usage.inputTokens,
           p_output_tokens: usage.outputTokens,
+        });
+        if (!settlement?.ok) {
+          throw new Error(`Credit settlement failed: ${settlement?.reason || "unknown"}`);
         }
-      );
-
-      if (!settlement?.ok) {
-        throw new Error(
-          `Credit settlement failed: ${settlement?.reason || "unknown"}`
-        );
       }
-    }
 
-    await supabase(
-      env,
-      "messages",
-      {
+      await supabase(env, "messages", {
         method: "POST",
         headers: { "Prefer": "return=minimal" },
         body: JSON.stringify([
-          {
-            conversation_id: conversationId,
-            user_id: user.id,
-            role: "user",
-            content,
-          },
-          {
-            conversation_id: conversationId,
-            user_id: user.id,
-            role: "assistant",
-            content: answer,
-          },
+          { conversation_id: conversationId, user_id: user.id, role: "user", content: content_text },
+          { conversation_id: conversationId, user_id: user.id, role: "assistant", content: answer },
         ]),
-      }
-    );
+      });
 
-    await supabase(
-      env,
-      `conversations?id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}`,
-      {
-        method: "PATCH",
-        headers: { "Prefer": "return=minimal" },
-        body: JSON.stringify({
-          updated_at: new Date().toISOString(),
-          ...(conversation.title === "新しい会話"
-            ? { title: content.slice(0, 80) }
-            : {}),
-        }),
-      }
-    );
+      await supabase(
+        env,
+        `conversations?id=eq.${encodeURIComponent(conversationId)}&user_id=eq.${encodeURIComponent(user.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Prefer": "return=minimal" },
+          body: JSON.stringify({
+            updated_at: new Date().toISOString(),
+            ...(conversation.title === "新しい会話" ? { title: content_text.slice(0, 80) } : {}),
+          }),
+        }
+      );
 
-    return json({ ok: true, answer });
+      return json({ ok: true, answer });
     } catch (err) {
       return json({ error: err.message || String(err), stack: err.stack }, 500);
     }
@@ -1262,12 +1206,7 @@ async function handle(request, env) {
 
     if (path === "/api/bot/status" && method === "GET") {
       const raw = await env.OAUTH_STATE.get("bot:status");
-      if (!raw) {
-        return json({
-          error: "まだ眠いよぉ…もう少し寝かせて…？",
-        }, 503);
-      }
-
+      if (!raw) return json({ error: "まだ眠いよぉ…もう少し寝かせて…？" }, 503);
       const data = JSON.parse(raw);
       const age = Date.now() - Date.parse(data.updated_at);
       if (age > 5 * 60 * 1000 || age < -30000) {
@@ -1279,28 +1218,15 @@ async function handle(request, env) {
     if (path === "/api/stats" && method === "GET") {
       const raw = await env.OAUTH_STATE.get("bot:stats");
       if (!raw) return json({ error: "Stats not available" }, 503);
-      return json({
-        ok: true,
-        stats: JSON.parse(raw),
-      });
+      return json({ ok: true, stats: JSON.parse(raw) });
     }
 
-    } catch (err) {
-      return json({ error: err.message || String(err), stack: err.stack }, 500);
-    }
-
-  if (path === "/api/settings" && method === "GET") {
-      return json({
-        ok: true,
-        settings: await readBotSettings(env),
-      });
+    if (path === "/api/settings" && method === "GET") {
+      return json({ ok: true, settings: await readBotSettings(env) });
     }
 
     if (path === "/api/settings" && method === "POST") {
-      return json({
-        ok: true,
-        settings: await writeBotSettings(await readJson(request), env),
-      });
+      return json({ ok: true, settings: await writeBotSettings(await readJson(request), env) });
     }
 
     return json({ error: "Not found" }, 404);
