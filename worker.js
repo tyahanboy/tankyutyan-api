@@ -1021,6 +1021,7 @@ async function handle(request, env) {
 
   // Member chat: send a message and receive an AI response
   if (path === "/api/chat/messages" && method === "POST") {
+    try {
     /* CHAT_DEBUG_TRY */ try {
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
@@ -1198,6 +1199,9 @@ async function handle(request, env) {
     );
 
     return json({ ok: true, answer });
+    } catch (err) {
+      return json({ error: err.message || String(err), stack: err.stack }, 500);
+    }
   }
 
   if (path.startsWith("/api/")) {
