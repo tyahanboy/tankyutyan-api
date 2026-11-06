@@ -1,0 +1,52 @@
+[1mdiff --git a/worker.js b/worker.js[m
+[1mindex 2bab524..c851c84 100644[m
+[1m--- a/worker.js[m
+[1m+++ b/worker.js[m
+[36m@@ -528,6 +528,33 @@[m [mfunction validStats(data) {[m
+      Number.isFinite(Date.parse(data.updated_at)));[m
+ }[m
+ [m
+[32m+[m[32m// Turnstile 検証ヘルパー関数[m
+[32m+[m[32masync function verifyTurnstile(token, request, env) {[m
+[32m+[m[32m  if (!token) return false;[m
+[32m+[m[32m  const secret = env.TURNSTILE_SECRET_KEY;[m
+[32m+[m[32m  if (!secret) {[m
+[32m+[m[32m    console.error("TURNSTILE_SECRET_KEY is missing");[m
+[32m+[m[32m    return false;[m
+[32m+[m[32m  }[m
+[32m+[m[32m  const ip = request.headers.get("CF-Connecting-IP") || "";[m
+[32m+[m[32m  try {[m
+[32m+[m[32m    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {[m
+[32m+[m[32m      method: "POST",[m
+[32m+[m[32m      headers: { "Content-Type": "application/x-www-form-urlencoded" },[m
+[32m+[m[32m      body: new URLSearchParams({[m
+[32m+[m[32m        secret: secret,[m
+[32m+[m[32m        response: token,[m
+[32m+[m[32m        remoteip: ip,[m
+[32m+[m[32m      }),[m
+[32m+[m[32m    });[m
+[32m+[m[32m    const outcome = await res.json();[m
+[32m+[m[32m    return outcome.success === true;[m
+[32m+[m[32m  } catch (err) {[m
+[32m+[m[32m    console.error("Turnstile verification error:", err);[m
+[32m+[m[32m    return false;[m
+[32m+[m[32m  }[m
+[32m+[m[32m}[m
+[32m+[m
+ async function handle(request, env) {[m
+   const url = new URL(request.url);[m
+   const path = url.pathname;[m
+[1mdiff --git a/wrangler.jsonc b/wrangler.jsonc[m
+[1mindex 34cb141..295fee5 100644[m
+[1m--- a/wrangler.jsonc[m
+[1m+++ b/wrangler.jsonc[m
+[36m@@ -12,7 +12,8 @@[m
+     "DISCORD_CLIENT_ID": "1552588868602175589",[m
+     "DISCORD_GUILD_ID": "1472077482344579226",[m
+     "SUPABASE_URL": "https://rgtxclaexxanzijrjjey.supabase.co",[m
+[31m-    "DISCORD_OWNER_ID": "1306609954593177700"[m
+[32m+[m[32m    "DISCORD_OWNER_ID": "1306609954593177700",[m
+[32m+[m[32m    "TURNSTILE_SITE_KEY": "0x4AAAAAAF15uOl7-kzQvwHU"[m
+   },[m
+   "assets": {[m
+     "directory": "./public",[m

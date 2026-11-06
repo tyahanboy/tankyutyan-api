@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eff6ff">
+  <meta name="description" content="たんきゅーちゃん 利用者向けチャット">
+  <title>たんきゅーちゃん | チャット</title>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, "Noto Sans JP", sans-serif;
+      color: #24324b;
+      background: #f3f7ff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    header {
+      height: 64px; padding: 0 20px; display: flex;
+      align-items: center; justify-content: space-between;
+      background: #fff; border-bottom: 1px solid #e5ecf8;
+    }
+    .brand { font-weight: 800; color: #4778c8; font-size: 19px; }
+    .brand small { display: block; font-size: 10px; color: #91a3bd; }
+    button {
+      border: 0; border-radius: 12px; padding: 11px 16px;
+      background: #5b8def; color: white; font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .5; cursor: wait; }
+    .secondary { background: #eaf1ff; color: #4778c8; }
+    main {
+      max-width: 1100px; margin: 24px auto; padding: 0 16px;
+      display: grid; grid-template-columns: 260px 1fr; gap: 18px;
+    }
+    .panel {
+      background: white; border: 1px solid #e5ecf8;
+      border-radius: 18px; box-shadow: 0 5px 20px #365b9610;
+    }
+    aside { padding: 16px; }
+    h2 { font-size: 15px; margin: 4px 0 14px; }
+    #conversationList { display: grid; gap: 8px; margin-top: 14px; }
+    .conversation {
+      width: 100%; text-align: left; background: #f5f8ff;
+      color: #536783; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .conversation.active { background: #e7efff; color: #376cc2; }
+    .credit {
+      margin-top: 20px; padding: 14px; border-radius: 14px;
+      background: #f5f8ff; font-size: 12px; line-height: 1.8;
+    }
+    .credit strong { color: #4778c8; }
+    #chat { min-height: 70vh; display: flex; flex-direction: column; }
+    .chat-head { padding: 18px 20px; border-bottom: 1px solid #edf1f8; }
+    .chat-head strong { font-size: 16px; }
+    .chat-head small { display: block; color: #91a0b5; margin-top: 4px; }
+    #messages {
+      flex: 1; padding: 20px; display: flex; flex-direction: column;
+      gap: 14px; overflow-y: auto; min-height: 350px;
+    }
+    .message {
+      max-width: 82%; padding: 12px 15px; border-radius: 16px;
+      white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7;
+      font-size: 14px;
+    }
+    .message.user {
+      align-self: flex-end; background: #e7efff; color: #315d9d;
+      border-bottom-right-radius: 5px;
+    }
+    .message.assistant {
+      align-self: flex-start; background: #f3f6fb;
+      border-bottom-left-radius: 5px;
+    }
+    .message.system {
+      align-self: center; color: #8291a8; background: transparent;
+      font-size: 12px; text-align: center;
+    }
+    .composer {
+      padding: 16px; border-top: 1px solid #edf1f8;
+      display: flex; gap: 10px; align-items: flex-end;
+    }
+    textarea {
+      flex: 1; resize: vertical; min-height: 48px; max-height: 150px;
+      border: 1px solid #dce6f5; border-radius: 13px;
+      padding: 13px; font: inherit; outline: none;
+    }
+    textarea:focus { border-color: #7ca5ef; }
+    #login {
+      max-width: 420px; margin: 12vh auto; padding: 32px;
+      text-align: center;
+    }
+    #login p { color: #7b8ba3; line-height: 1.8; }
+    #status { color: #8291a8; font-size: 12px; padding: 0 18px 12px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 700px) {
+      main { grid-template-columns: 1fr; margin: 12px auto; }
+      aside { padding: 12px; }
+      #conversationList { display: flex; overflow-x: auto; }
+      .conversation { min-width: 150px; }
+      .credit { margin-top: 12px; }
+      #chat { min-height: 65vh; }
+      #messages { min-height: 280px; padding: 14px; }
+      .message { max-width: 92%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">たんきゅーちゃん<small>MEMBER CHAT</small></div>
+    <button id="logout" class="secondary" hidden>ログアウト</button>
+  </header>
+
+  <section id="login" class="panel" hidden>
+    <h2>たんきゅーちゃんとお話ししよう！</h2>
+    <p>チャットを利用するにはDiscordアカウントでログインしてください。</p>
+    <button id="loginButton">Discordでログイン</button>
+  </section>
+
+  <main id="app" hidden>
+    <aside class="panel">
+      <button id="newConversation" style="width:100%">＋ 新しい会話</button>
+      <h2 style="margin-top:22px">会話履歴</h2>
+      <div id="conversationList"></div>
+      <div class="credit" id="creditBox">クレジットを読み込み中…</div>
+    </aside>
+
+    <section id="chat" class="panel">
+      <div class="chat-head">
+        <strong id="chatTitle">新しい会話</strong>
+        <small id="userName"></small>
+      </div>
+      <div id="messages">
+        <div class="message system">会話を選ぶか、新しい会話を始めてね！</div>
+      </div>
+      <div id="status" role="status"></div>
+      <form class="composer" id="composer">
+        <textarea id="input" maxlength="4000" placeholder="質問を入力してね…" required></textarea>
+        <button id="send" type="submit">送信</button>
+      </form>
+    </section>
+  </main>
+
+<script>
+const $ = id => document.getElementById(id);
+let currentConversation = null;
+let sending = false;
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {})
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || `通信エラー (${response.status})`);
+    error.status = response.status;
+    error.reason = data.reason;
+    throw error;
+  }
+  return data;
+}
+
+function showMessage(role, content) {
+  const item = document.createElement("div");
+  item.className = `message ${role}`;
+  item.textContent = content;
+  $("messages").appendChild(item);
+  $("messages").scrollTop = $("messages").scrollHeight;
+}
+
+function setStatus(text) { $("status").textContent = text; }
+
+async function loadCredits() {
+  try {
+    const data = await api("/api/chat/credits");
+    if (data.is_unlimited) {
+      $("creditBox").innerHTML = "<strong>クレジット</strong><br>無制限（Owner）";
+      return;
+    }
+    const c = data.credits;
+    const now = new Date();
+    const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const today = jst.toISOString().slice(0, 10);
+    const month = today.slice(0, 7) + "-01";
+    const dailyUsed = c.daily_period === today ? Number(c.daily_used) : 0;
+    const monthlyUsed = c.monthly_period === month ? Number(c.monthly_used) : 0;
+    const dailyLeft = Math.max(0, Number(c.daily_limit) - dailyUsed);
+    const monthlyLeft = Math.max(0, Number(c.monthly_limit) - monthlyUsed);
+    const bonus = Number(c.bonus_credits || 0);
+    const overage = Number(c.overage_credits || 0);
+    $("creditBox").innerHTML =
+      `<strong>クレジット残量</strong><br>` +
+      `今日：${dailyLeft.toLocaleString()} / ${Number(c.daily_limit).toLocaleString()}<br>` +
+      `今月：${monthlyLeft.toLocaleString()} / ${Number(c.monthly_limit).toLocaleString()}<br>` +
+      `ボーナス：${bonus.toLocaleString()}<br>` +
+      (overage > 0 ? `<span style="color:#d65b65">未精算：${overage.toLocaleString()}</span>` : "");
+  } catch (error) {
+    $("creditBox").textContent = "クレジット情報を取得できませんでした。";
+  }
+}
+
+async function loadConversations() {
+  const data = await api("/api/chat/conversations");
+  const list = $("conversationList");
+  list.replaceChildren();
+  for (const conversation of data.conversations) {
+    const button = document.createElement("button");
+    button.className = "conversation" +
+      (conversation.id === currentConversation ? " active" : "");
+    button.textContent = conversation.title || "新しい会話";
+    button.title = button.textContent;
+    button.onclick = () => openConversation(conversation.id);
+    list.appendChild(button);
+  }
+}
+
+async function openConversation(id) {
+  currentConversation = id;
+  const data = await api("/api/chat/messages?conversation_id=" + encodeURIComponent(id));
+  $("chatTitle").textContent = data.conversation.title || "新しい会話";
+  $("messages").replaceChildren();
+  for (const message of data.messages) {
+    showMessage(message.role === "user" ? "user" : "assistant", message.content);
+  }
+  if (!data.messages.length) {
+    showMessage("system", "ここから会話を始めよう！");
+  }
+  await loadConversations();
+  setStatus("");
+}
+
+async function createConversation() {
+  const data = await api("/api/chat/conversations", {
+    method: "POST",
+    body: JSON.stringify({ title: "新しい会話" })
+  });
+  await openConversation(data.conversation.id);
+}
+
+function errorText(error) {
+  if (error.reason === "daily_limit") return "本日の利用上限に達しました。";
+  if (error.reason === "overage_unpaid") return "未精算の超過利用分があるため、現在利用できません。管理者に連絡してください。";
+  if (error.status === 429) return "クレジットが不足しています。";
+  if (error.status === 401) return "ログイン状態を確認できません。再ログインしてください。";
+  return error.message || "エラーが発生しました。";
+}
+
+$("composer").addEventListener("submit", async event => {
+  event.preventDefault();
+  const content = $("input").value.trim();
+  if (!content || sending) return;
+  if (!currentConversation) {
+    try { await createConversation(); }
+    catch (error) { setStatus(errorText(error)); return; }
+  }
+
+  sending = true;
+  $("send").disabled = true;
+  $("input").disabled = true;
+  showMessage("user", content);
+  $("input").value = "";
+  setStatus("たんきゅーちゃんが考え中…");
+
+  try {
+    const data = await api("/api/chat/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        conversation_id: currentConversation,
+        content
+      })
+    });
+    showMessage("assistant", data.answer);
+    setStatus("");
+    await loadConversations();
+    await loadCredits();
+  } catch (error) {
+    showMessage("system", errorText(error));
+    setStatus("");
+    await loadCredits();
+  } finally {
+    sending = false;
+    $("send").disabled = false;
+    $("input").disabled = false;
+    $("input").focus();
+  }
+});
+
+$("newConversation").onclick = async () => {
+  try { await createConversation(); }
+  catch (error) { setStatus(errorText(error)); }
+};
+
+$("loginButton").onclick = () => {
+  location.href = "/api/auth/discord";
+};
+
+$("logout").onclick = async () => {
+  await api("/api/auth/logout", { method: "POST" }).catch(() => {});
+  location.reload();
+};
+
+async function start() {
+  try {
+    const me = await api("/api/auth/me");
+    $("app").hidden = false;
+    $("logout").hidden = false;
+    $("userName").textContent =
+      me.user.global_name || me.user.username || "ログイン中";
+    await Promise.all([loadConversations(), loadCredits()]);
+    const first = $("conversationList").querySelector("button");
+    if (first) await first.click();
+  } catch (error) {
+    $("login").hidden = false;
+  }
+}
+
+start();
+</script>
+</body>
+</html>

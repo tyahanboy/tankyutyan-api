@@ -1,0 +1,424 @@
+import { enqueueAction, listActions } from "./control-queue/queue.js";
+import http from "node:http";
+import fs from "node:fs/promises";
+import {
+  randomBytes,
+  createHmac,
+  timingSafeEqual
+} from "node:crypto";
+
+const PORT = Number(process.env.PORT || process.env.AUTH_TEST_PORT) || 3001;
+const HOST = process.env.HOST || "127.0.0.1";
+const HOME = process.env.HOME || "";
+const BOT_STATUS_FILE = `${HOME}/discord-bot/bot_status.json`;
+const USAGE_LOG_FILE = `${HOME}/discord-bot/usage_log.csv`;
+const STALE_AFTER_MS = 5 * 60 * 1000;
+
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const AGENT_SECRET = process.env.AGENT_SECRET;
+const ADMIN_IDS = new Set(
+  (process.env.DISCORD_ADMIN_IDS || "")
+    .split(",").map(v => v.trim()).filter(Boolean)
+);
+const APP_ORIGIN = process.env.APP_ORIGIN;
+const CALLBACK_URL =
+  process.env.DISCORD_CALLBACK_URL ||
+  "http://127.0.0.1:3001/api/auth/callback";
+const SESSION_SECONDS = 8 * 60 * 60;
+const COOKIE_NAME = "tankyutyan_session";
+const STATE_COOKIE = "tankyutyan_oauth_state";
+const pendingStates = new Map();
+
+if (!AGENT_SECRET || !/^[a-f0-9]{64}$/i.test(AGENT_SECRET)) throw new Error("AGENT_SECRETの設定が不正です");
+if (!CLIENT_ID || !CLIENT_SECRET || !SESSION_SECRET ||
+    !ADMIN_IDS.size || !APP_ORIGIN) {
+  throw new Error("認証用環境変数が不足しています");
+}
+
+function sendJson(res, statusCode, data) {
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  });
+  res.end(JSON.stringify(data));
+}
+
+function cookieOptions(maxAge = 0) {
+  const secure = process.env.COOKIE_SECURE === "true" ? "; Secure" : "";
+  return `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+}
+
+function sign(value) {
+  return createHmac("sha256", SESSION_SECRET)
+    .update(value).digest("base64url");
+}
+
+function safeEqual(a, b) {
+  const aa = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return aa.length === bb.length && timingSafeEqual(aa, bb);
+}
+
+function readCookies(req) {
+  const result = {};
+  for (const part of (req.headers.cookie || "").split(";")) {
+    const index = part.indexOf("=");
+    if (index > 0) {
+      result[part.slice(0, index).trim()] =
+        part.slice(index + 1).trim();
+    }
+  }
+  return result;
+}
+
+function makeSession(userId) {
+  const payload = Buffer.from(JSON.stringify({
+    uid: userId,
+    exp: Math.floor(Date.now() / 1000) + SESSION_SECONDS
+  })).toString("base64url");
+  return `${payload}.${sign(payload)}`;
+}
+
+function verifySession(req) {
+  const token = readCookies(req)[COOKIE_NAME];
+  if (!token) return null;
+
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+
+  const [payload, signature] = parts;
+  if (!safeEqual(sign(payload), signature)) return null;
+
+  try {
+    const session = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8")
+    );
+    if (typeof session.uid !== "string" ||
+        !ADMIN_IDS.has(session.uid) ||
+        !Number.isFinite(session.exp) ||
+        session.exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return { id: session.uid };
+  } catch {
+    return null;
+  }
+}
+
+function redirect(res, location, cookies = []) {
+  res.writeHead(302, {
+    Location: location,
+    "Cache-Control": "no-store",
+    "Set-Cookie": cookies
+  });
+  res.end();
+}
+
+function parseCsvLine(line) {
+  const result = [];
+  let field = "";
+  let quoted = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (quoted && line[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (ch === "," && !quoted) {
+      result.push(field);
+      field = "";
+    } else {
+      field += ch;
+    }
+  }
+  result.push(field);
+  return result;
+}
+
+async function readUsageStats() {
+  const raw = await fs.readFile(USAGE_LOG_FILE, "utf8");
+  const lines = raw.trim().split(/\r?\n/);
+
+  if (lines.length < 2) {
+    return {
+      total: 0, success: 0, failed: 0, success_rate: 0,
+      today_success: 0, by_date: [], by_model: [], by_mode: [],
+      updated_at: null
+    };
+  }
+
+  const headers = parseCsvLine(lines[0]);
+  const rows = lines.slice(1).filter(line => line.trim()).map(line => {
+    const values = parseCsvLine(line);
+    return Object.fromEntries(
+      headers.map((header, index) => [header, values[index] ?? ""])
+    );
+  });
+
+  const success = rows.filter(row => row.status === "success").length;
+  const failed = rows.filter(row => row.status === "failed").length;
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo", year: "numeric",
+    month: "2-digit", day: "2-digit"
+  }).format(new Date());
+
+  const countBy = key => {
+    const counts = new Map();
+    for (const row of rows) {
+      const label = row[key] || "unknown";
+      const current = counts.get(label) ||
+        { count: 0, success: 0, failed: 0 };
+      current.count++;
+      if (row.status === "success") current.success++;
+      if (row.status === "failed") current.failed++;
+      counts.set(label, current);
+    }
+    return [...counts.entries()]
+      .map(([label, value]) => ({ label, ...value }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  };
+
+  const byDate = new Map();
+  for (const row of rows) {
+    const date = row.date_jst || "unknown";
+    const item = byDate.get(date) ||
+      { date, total: 0, success: 0, failed: 0 };
+    item.total++;
+    if (row.status === "success") item.success++;
+    if (row.status === "failed") item.failed++;
+    byDate.set(date, item);
+  }
+
+  return {
+    total: rows.length,
+    success,
+    failed: rows.filter(row => row.status !== "success").length,
+    success_rate: rows.length
+      ? Math.round(success / rows.length * 100) : 0,
+    today_success: rows.filter(
+      row => row.date_jst === today && row.status === "success"
+    ).length,
+    by_date: [...byDate.values()].sort(
+      (a, b) => a.date.localeCompare(b.date)
+    ),
+    by_model: countBy("model"),
+    by_mode: countBy("mode"),
+    updated_at: rows.at(-1)?.timestamp_jst || null
+  };
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url || "/", "http://127.0.0.1");
+
+  try {
+    if (req.method === "GET" &&
+        url.pathname === "/api/health") {
+      return sendJson(res, 200, {
+        ok: true, service: "tankyutyan-auth-test"
+      });
+    }
+
+    if (req.method === "GET" &&
+        url.pathname === "/api/auth/discord") {
+      const state = randomBytes(32).toString("hex");
+      pendingStates.set(state, Date.now() + 5 * 60 * 1000);
+
+      for (const [key, expiry] of pendingStates) {
+        if (expiry < Date.now()) pendingStates.delete(key);
+      }
+
+      const authorize = new URL(
+        "https://discord.com/oauth2/authorize"
+      );
+      authorize.searchParams.set("client_id", CLIENT_ID);
+      authorize.searchParams.set("redirect_uri", CALLBACK_URL);
+      authorize.searchParams.set("response_type", "code");
+      authorize.searchParams.set("scope", "identify");
+      authorize.searchParams.set("state", state);
+
+      return redirect(res, authorize.toString(), [
+        `${STATE_COOKIE}=${state}; ${cookieOptions(300)}`
+      ]);
+    }
+
+    if (req.method === "GET" &&
+        url.pathname === "/api/auth/callback") {
+      const state = url.searchParams.get("state") || "";
+      const code = url.searchParams.get("code") || "";
+      const cookieState = readCookies(req)[STATE_COOKIE] || "";
+      const expiry = pendingStates.get(state);
+      pendingStates.delete(state);
+
+      const clearState =
+        `${STATE_COOKIE}=; ${cookieOptions(0)}`;
+
+      if (!state || !code || !cookieState ||
+          !safeEqual(state, cookieState) ||
+          !expiry || expiry < Date.now()) {
+        return redirect(res, `${APP_ORIGIN}/?login=failed`, [
+          clearState
+        ]);
+      }
+
+      const tokenResponse = await fetch(
+        "https://discord.com/api/oauth2/token",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: CLIENT_ID,
+            client_secret: CLIENT_SECRET,
+            grant_type: "authorization_code",
+            code,
+            redirect_uri: CALLBACK_URL
+          }),
+          signal: AbortSignal.timeout(10000)
+        }
+      );
+
+      if (!tokenResponse.ok) {
+        return redirect(res, `${APP_ORIGIN}/?login=failed`, [
+          clearState
+        ]);
+      }
+
+      const tokenData = await tokenResponse.json();
+      if (typeof tokenData.access_token !== "string") {
+        return redirect(res, `${APP_ORIGIN}/?login=failed`, [
+          clearState
+        ]);
+      }
+
+      const userResponse = await fetch(
+        "https://discord.com/api/users/@me",
+        {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`
+          },
+          signal: AbortSignal.timeout(10000)
+        }
+      );
+
+      if (!userResponse.ok) {
+        return redirect(res, `${APP_ORIGIN}/?login=failed`, [
+          clearState
+        ]);
+      }
+
+      const user = await userResponse.json();
+      if (typeof user.id !== "string" || !ADMIN_IDS.has(user.id)) {
+        return redirect(res, `${APP_ORIGIN}/?login=denied`, [
+          clearState,
+          `${COOKIE_NAME}=; ${cookieOptions(0)}`
+        ]);
+      }
+
+      const session = makeSession(user.id);
+      return redirect(res, APP_ORIGIN, [
+        clearState,
+        `${COOKIE_NAME}=${session}; ${cookieOptions(SESSION_SECONDS)}`
+      ]);
+    }
+
+    if (req.method === "GET" &&
+        url.pathname === "/api/auth/me") {
+      const user = verifySession(req);
+      if (!user) {
+        return sendJson(res, 401, { ok: false, user: null });
+      }
+      return sendJson(res, 200, {
+        ok: true, user: { id: user.id }
+      });
+    }
+
+    if (req.method === "POST" &&
+        url.pathname === "/api/auth/logout") {
+      const origin = req.headers.origin;
+      if (origin && origin !== APP_ORIGIN) {
+        return sendJson(res, 403, { ok: false });
+      }
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Set-Cookie": `${COOKIE_NAME}=; ${cookieOptions(0)}`,
+        "X-Content-Type-Options": "nosniff"
+      });
+      return res.end(JSON.stringify({ ok: true }));
+    }
+
+    if (url.pathname === "/api/bot/status" ||
+        url.pathname === "/api/stats") {
+      if (!verifySession(req)) {
+        return sendJson(res, 401, {
+          ok: false, message: "ログインが必要だよ"
+        });
+      }
+    }
+
+    if (req.method === "GET" &&
+        url.pathname === "/api/bot/status") {
+      try {
+        const status = JSON.parse(
+          await fs.readFile(BOT_STATUS_FILE, "utf8")
+        );
+        const updatedAt = typeof status.updated_at === "string"
+          ? Date.parse(status.updated_at) : NaN;
+        const stale = !Number.isFinite(updatedAt) ||
+          Date.now() - updatedAt > STALE_AFTER_MS ||
+          updatedAt > Date.now() + 30000;
+
+        return sendJson(res, 200, {
+          ok: true,
+          bot: {
+            connected: status.connected === true && !stale,
+            stale,
+            latency_ms: Number.isFinite(status.latency_ms)
+              ? status.latency_ms : null,
+            bot_user: typeof status.bot_user === "string"
+              ? status.bot_user : null,
+            guild_count: Number.isInteger(status.guild_count)
+              ? status.guild_count : null,
+            updated_at: typeof status.updated_at === "string"
+              ? status.updated_at : null
+          }
+        });
+      } catch {
+        return sendJson(res, 503, {
+          ok: false, bot: null,
+          message: "まだ眠いよぉ…もう少し寝かせて…？"
+        });
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/stats") {
+      try {
+        return sendJson(res, 200, {
+          ok: true, stats: await readUsageStats()
+        });
+      } catch {
+        return sendJson(res, 503, {
+          ok: false, message: "利用統計を読み取れなかったよ"
+        });
+      }
+    }
+
+    return sendJson(res, 404, {
+      ok: false, message: "そのAPIはまだないよ"
+    });
+  } catch {
+    return sendJson(res, 500, {
+      ok: false, message: "認証APIでエラーが発生したよ"
+    });
+  }
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`認証テストAPI起動: http://${HOST}:${PORT}`);
+});
