@@ -119,69 +119,80 @@
   <!-- TANKYU_PATCH_START -->
 <script>
 (function() {
-  function escapeHtml(str) {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
   function cleanUI() {
-    // 1. 「時間計測は未実装」のテキストを消去
+    // 1. 時間計測は未実装の表記を消去
     document.querySelectorAll('div, span, p, h1, h2, h3').forEach(el => {
       if (el.children.length === 0 && el.textContent.includes('時間計測は未実装')) {
         el.textContent = el.textContent.replace(/\s*\([^)]*時間計測は未実装[^)]*\)/g, '');
       }
     });
-
-    // 2. 「開発モード」カードおよび残骸アイコン枠の非表示化
+    // 2. 開発モードカードの非表示
     document.querySelectorAll('div').forEach(el => {
       if (el.innerText && (el.innerText.includes('開発モード') || el.innerText.includes('接続準備中'))) {
         el.style.display = 'none';
       }
-      // アイコンのみ残った空カード枠を特定して非表示
-      if (el.children.length === 1 && el.querySelector('svg') && !el.innerText.trim()) {
-        const parent = el.parentElement;
-        if (parent && parent.children.length === 1 && !parent.innerText.trim()) {
-          parent.style.display = 'none';
-        }
-      }
     });
   }
 
-  async function loadActivities() {
+  async function loadActivitiesChart() {
     try {
       const res = await fetch('/api/activities');
       if (!res.ok) return;
       const data = await res.json();
-      if (!data.ok || !Array.isArray(data.activities) || data.activities.length === 0) return;
+      if (!data.ok || !Array.isArray(data.activities)) return;
 
-      // 「まだ活動ログがないよ」を含むコンテナを取得
+      const activities = data.activities;
+      const totalCount = activities.length;
+
       const allDivs = Array.from(document.querySelectorAll('div, section'));
-      const target = allDivs.find(d => d.innerText && d.innerText.includes('まだ活動ログがないよ'));
+      const target = allDivs.find(d => d.innerText && (d.innerText.includes('まだ活動ログがないよ') || d.innerText.includes('利用回数') || d.innerText.includes('活動記録')));
       if (!target) return;
 
-      const itemsHtml = data.activities.map(act => `
-        <div style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 14px; margin-bottom: 10px; text-align: left;">
-          <div style="font-weight: bold; color: #818cf8; font-size: 1.05em;">📌 ${escapeHtml(act.topic)}</div>
-          <div style="margin-top: 6px; font-size: 0.95em; color: #e5e7eb; white-space: pre-wrap; line-height: 1.5;">${escapeHtml(act.content)}</div>
-          ${act.next_step ? `<div style="margin-top: 6px; font-size: 0.85em; color: #9ca3af; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 6px;">🔍 ${escapeHtml(act.next_step)}</div>` : ''}
-          <div style="font-size: 0.75em; color: #6b7280; margin-top: 8px; text-align: right;">${new Date(act.created_at).toLocaleString('ja-JP')}</div>
-        </div>
-      `).join('');
+      // 日付ごとの利用回数を集計
+      const countsByDate = {};
+      activities.forEach(act => {
+        const d = act.created_at ? new Date(act.created_at).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : '今日';
+        countsByDate[d] = (countsByDate[d] || 0) + 1;
+      });
+
+      const dates = Object.keys(countsByDate).slice(-7);
+      if (dates.length === 0) dates.push('今日');
+      const maxCount = Math.max(...Object.values(countsByDate), 1);
+
+      const barsHtml = dates.map(d => {
+        const count = countsByDate[d] || 0;
+        const heightPct = Math.max(12, Math.round((count / maxCount) * 100));
+        return `
+          <div style="display: flex; flex-direction: column; align-items: center; flex: 1;">
+            <span style="font-size: 0.7em; color: #a5b4fc; margin-bottom: 4px;">${count}回</span>
+            <div style="width: 100%; max-width: 26px; background: rgba(99, 102, 241, 0.15); height: 70px; border-radius: 6px; display: flex; align-items: flex-end; overflow: hidden; padding: 2px;">
+              <div style="width: 100%; height: ${heightPct}%; background: linear-gradient(180deg, #818cf8 0%, #4f46e5 100%); border-radius: 4px;"></div>
+            </div>
+            <span style="font-size: 0.65em; color: #9ca3af; margin-top: 6px;">${d}</span>
+          </div>
+        `;
+      }).join('');
 
       target.innerHTML = `
-        <div style="width: 100%;">
-          ${itemsHtml}
+        <div style="width: 100%; text-align: center; padding: 4px 0;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding: 0 4px;">
+            <span style="font-size: 0.85em; color: #9ca3af;">/log 記録回数</span>
+            <span style="font-size: 1.3em; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.7em; font-weight: normal; color: #9ca3af;">回</span></span>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 6px; height: 105px; padding: 4px 0;">
+            ${barsHtml}
+          </div>
         </div>
       `;
     } catch (e) {
-      console.error("Activities load error:", e);
+      console.error("Activities chart error:", e);
     }
   }
 
   function init() {
     cleanUI();
-    loadActivities();
-    setInterval(cleanUI, 800);
+    loadActivitiesChart();
+    setInterval(cleanUI, 1000);
   }
 
   if (document.readyState === 'loading') {
@@ -191,5 +202,4 @@
   }
 })();
 </script>
-</body>
-</html>
+</body></html>
