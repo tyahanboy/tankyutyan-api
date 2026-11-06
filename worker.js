@@ -1021,6 +1021,7 @@ async function handle(request, env) {
 
   // Member chat: send a message and receive an AI response
   if (path === "/api/chat/messages" && method === "POST") {
+    /* CHAT_DEBUG_TRY */ try {
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
 
@@ -1228,7 +1229,11 @@ async function handle(request, env) {
       });
     }
 
-    if (path === "/api/settings" && method === "GET") {
+    } catch (err) {
+      return json({ error: err.message || String(err), stack: err.stack }, 500);
+    }
+
+  if (path === "/api/settings" && method === "GET") {
       return json({
         ok: true,
         settings: await readBotSettings(env),
