@@ -119,7 +119,7 @@
   <!-- TANKYU_PATCH_START -->
 <script>
 (function() {
-  function fixUI() {
+  function cleanUI() {
     // 1. (時間計測は未実装) の除去
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
     let node;
@@ -129,32 +129,27 @@
       }
     }
 
-    // 2. 最下部「開発モード」カードのみ非表示
+    // 2. 最下部「開発モード」の残骸カード枠を隠す
     document.querySelectorAll('div').forEach(el => {
-      const txt = el.innerText || '';
+      const txt = el.innerText ? el.innerText.trim() : '';
       if (el.children.length < 5 && (txt.includes('開発モード') || txt.includes('接続準備中'))) {
         el.style.display = 'none';
+      }
+      // 文字なしでアイコン（SVG）のみのカード枠を非表示
+      if (el.children.length === 1 && el.querySelector('svg') && txt === '') {
+        const p = el.parentElement;
+        if (p && p.innerText.trim() === '') p.style.display = 'none';
+        else el.style.display = 'none';
       }
     });
   }
 
-  async function renderChartOnly() {
-    if (document.getElementById('tankyu-chart-container')) return;
-
-    // 「最近の活動」の見出しを探す
-    const allDivs = Array.from(document.querySelectorAll('div, span, h2, h3'));
-    const headerNode = allDivs.find(d => d.children.length === 0 && d.textContent.trim() === '最近の活動');
-    if (!headerNode) return;
-
-    // ヘッダーの親カード枠
-    const card = headerNode.closest('div');
-    if (!card) return;
-
-    // 「まだ活動ログがないよ」等のテキストが入っているエリア
-    const targetArea = Array.from(card.querySelectorAll('div')).find(d => 
-      d.innerText && (d.innerText.includes('まだ活動ログがないよ') || d.innerText.includes('Discordで /log'))
-    );
-    if (!targetArea) return;
+  async function renderChart() {
+    // 「まだ活動ログがないよ」または「/log 累計記録」を含む要素を探す
+    const divs = Array.from(document.querySelectorAll('div'));
+    const target = divs.find(d => d.innerText && d.innerText.includes('まだ活動ログがないよ'));
+    
+    if (!target) return;
 
     try {
       const res = await fetch('/api/activities');
@@ -189,11 +184,10 @@
         `;
       }).join('');
 
-      // 中身のテキストエリアのみをグラフに差し替え
-      targetArea.id = 'tankyu-chart-container';
-      targetArea.innerHTML = `
-        <div style="width: 100%; padding: 8px 4px; box-sizing: border-box;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      // 波形アイコンと「まだ活動ログがないよ」等の文言エリアを丸ごと棒グラフに置き換え
+      target.innerHTML = `
+        <div style="width: 100%; padding: 12px 4px 4px 4px; box-sizing: border-box;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <span style="font-size: 0.85rem; color: #9ca3af; font-weight: 500;">/log 累計記録</span>
             <span style="font-size: 1.2rem; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.75rem; font-weight: normal; color: #9ca3af;">回</span></span>
           </div>
@@ -208,11 +202,11 @@
   }
 
   function update() {
-    fixUI();
-    renderChartOnly();
+    cleanUI();
+    renderChart();
   }
 
-  setInterval(update, 1000);
+  setInterval(update, 800);
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', update);
   } else {
