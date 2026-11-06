@@ -119,8 +119,8 @@
   <!-- TANKYU_PATCH_START -->
 <script>
 (function() {
-  function cleanUI() {
-    // 1. (時間計測は未実装) の除去
+  function applyCleanups() {
+    // 1. (時間計測は未実装) のテキストを消去
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
     let node;
     while (node = walker.nextNode()) {
@@ -129,88 +129,79 @@
       }
     }
 
-    // 2. 最下部「開発モード」の残骸カード枠を隠す
+    // 2. 最下部の開発モード枠を非表示
     document.querySelectorAll('div').forEach(el => {
       const txt = el.innerText ? el.innerText.trim() : '';
       if (el.children.length < 5 && (txt.includes('開発モード') || txt.includes('接続準備中'))) {
         el.style.display = 'none';
       }
-      // 文字なしでアイコン（SVG）のみのカード枠を非表示
-      if (el.children.length === 1 && el.querySelector('svg') && txt === '') {
-        const p = el.parentElement;
-        if (p && p.innerText.trim() === '') p.style.display = 'none';
-        else el.style.display = 'none';
-      }
     });
-  }
 
-  async function renderChart() {
-    // 「まだ活動ログがないよ」または「/log 累計記録」を含む要素を探す
-    const divs = Array.from(document.querySelectorAll('div'));
-    const target = divs.find(d => d.innerText && d.innerText.includes('まだ活動ログがないよ'));
-    
-    if (!target) return;
+    // 3. 「最近の活動」カード自体を非表示にし、その位置にカスタムグラフを挿入
+    const headers = Array.from(document.querySelectorAll('div, span, h2, h3'));
+    const header = headers.find(el => el.children.length === 0 && el.textContent.trim() === '最近の活動');
+    if (header) {
+      const card = header.closest('div[class*="rounded"], div[class*="border"], div');
+      if (card && !document.getElementById('pure-chart-box')) {
+        // カードの親または自身を隠してグラフと置換
+        card.style.display = 'none';
+        
+        const chartWrapper = document.createElement('div');
+        chartWrapper.id = 'pure-chart-box';
+        chartWrapper.style.cssText = 'background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 16px; margin-bottom: 16px;';
+        
+        card.parentNode.insertBefore(chartWrapper, card);
 
-    try {
-      const res = await fetch('/api/activities');
-      if (!res.ok) return;
-      const data = await res.json();
-      if (!data.ok || !Array.isArray(data.activities)) return;
+        fetch('/api/activities')
+          .then(res => res.json())
+          .then(data => {
+            if (!data.ok || !Array.isArray(data.activities)) return;
+            const acts = data.activities;
+            const total = acts.length;
 
-      const activities = data.activities;
-      const totalCount = activities.length;
+            const counts = {};
+            acts.forEach(a => {
+              const d = a.created_at ? new Date(a.created_at).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : '今日';
+              counts[d] = (counts[d] || 0) + 1;
+            });
 
-      const countsByDate = {};
-      activities.forEach(act => {
-        const d = act.created_at ? new Date(act.created_at).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : '今日';
-        countsByDate[d] = (countsByDate[d] || 0) + 1;
-      });
+            const dates = Object.keys(counts).slice(-7);
+            if (dates.length === 0) dates.push('今日');
+            const max = Math.max(...Object.values(counts), 1);
 
-      const dates = Object.keys(countsByDate).slice(-7);
-      if (dates.length === 0) dates.push('今日');
-      const maxCount = Math.max(...Object.values(countsByDate), 1);
+            const bars = dates.map(d => {
+              const c = counts[d] || 0;
+              const h = Math.max(15, Math.round((c / max) * 100));
+              return `
+                <div style="display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0;">
+                  <span style="font-size: 0.75rem; color: #a5b4fc; margin-bottom: 4px; font-weight: 600;">${c}回</span>
+                  <div style="width: 100%; max-width: 28px; background: rgba(255, 255, 255, 0.06); height: 85px; border-radius: 6px; display: flex; align-items: flex-end; padding: 2px; box-sizing: border-box;">
+                    <div style="width: 100%; height: ${h}%; background: linear-gradient(180deg, #818cf8 0%, #4f46e5 100%); border-radius: 4px;"></div>
+                  </div>
+                  <span style="font-size: 0.7rem; color: #9ca3af; margin-top: 6px;">${d}</span>
+                </div>
+              `;
+            }).join('');
 
-      const barsHtml = dates.map(d => {
-        const count = countsByDate[d] || 0;
-        const heightPct = Math.max(15, Math.round((count / maxCount) * 100));
-        return `
-          <div style="display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0;">
-            <span style="font-size: 0.75rem; color: #a5b4fc; margin-bottom: 4px; font-weight: 600;">${count}回</span>
-            <div style="width: 100%; max-width: 28px; background: rgba(255, 255, 255, 0.06); height: 80px; border-radius: 6px; display: flex; align-items: flex-end; padding: 2px; box-sizing: border-box;">
-              <div style="width: 100%; height: ${heightPct}%; background: linear-gradient(180deg, #818cf8 0%, #4f46e5 100%); border-radius: 4px;"></div>
-            </div>
-            <span style="font-size: 0.75rem; color: #9ca3af; margin-top: 6px;">${d}</span>
-          </div>
-        `;
-      }).join('');
-
-      // 波形アイコンと「まだ活動ログがないよ」等の文言エリアを丸ごと棒グラフに置き換え
-      target.innerHTML = `
-        <div style="width: 100%; padding: 12px 4px 4px 4px; box-sizing: border-box;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <span style="font-size: 0.85rem; color: #9ca3af; font-weight: 500;">/log 累計記録</span>
-            <span style="font-size: 1.2rem; font-weight: bold; color: #818cf8;">${totalCount} <span style="font-size: 0.75rem; font-weight: normal; color: #9ca3af;">回</span></span>
-          </div>
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; height: 110px;">
-            ${barsHtml}
-          </div>
-        </div>
-      `;
-    } catch (e) {
-      console.error(e);
+            chartWrapper.innerHTML = `
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                <span style="font-size: 0.9rem; color: #a5b4fc; font-weight: 600;">/log 記録回数</span>
+                <span style="font-size: 1.25rem; font-weight: bold; color: #818cf8;">${total} <span style="font-size: 0.75rem; font-weight: normal; color: #9ca3af;">回</span></span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; height: 115px;">
+                ${bars}
+              </div>
+            `;
+          }).catch(err => console.error(err));
+      }
     }
   }
 
-  function update() {
-    cleanUI();
-    renderChart();
-  }
-
-  setInterval(update, 800);
+  setInterval(applyCleanups, 600);
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', update);
+    document.addEventListener('DOMContentLoaded', applyCleanups);
   } else {
-    update();
+    applyCleanups();
   }
 })();
 </script>
