@@ -188,7 +188,7 @@ async function shouldSearchWebWithAI(env, query) {
       },
       { role: "user", content: text }
     ];
-    const res = await logfareChatCompletion(env, checkMessages);
+    const res = await aiChatCompletion(env, checkMessages);
     return res.answer.toUpperCase().includes("YES");
   } catch (err) {
     console.error("AI search judgment failed:", err);
@@ -298,69 +298,87 @@ function buildSearchContext(results) {
   ).join("\n\n---\n\n");
 }
 
-async function logfareChatCompletion(env, messages) {
-  const apiKey = env.LOGFARE_API_KEY || env.GROQ_API_KEY;
-  if (!apiKey) {
-    throw new Error("LOGFARE_API_KEY is missing");
-  }
-
+async function callChatProvider(url, apiKey, model, messages, maxTokensKey, maxTokensValue) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90000);
 
-  let response;
   try {
-    response = await fetch(
-      "https://logfare.ai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "logfare/auto",
-          messages,
-          max_tokens: 5000,
-          temperature: 0.6,
-        }),
-        signal: controller.signal,
-      }
-    );
-  } catch (error) {
-    if (error.name === "AbortError") {
-      throw new Error("Logfare request timed out");
+    const bodyObj = {
+      model,
+      messages,
+      temperature: 0.6,
+    };
+    bodyObj[maxTokensKey] = maxTokensValue;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(bodyObj),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`API error (${response.status}): ${errText.slice(0, 200)}`);
     }
-    throw error;
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    const rawUsage = data?.usage;
+
+    if (typeof content !== "string" || !content.trim()) {
+      throw new Error("Returned an empty response");
+    }
+
+    const inputTokens = rawUsage?.prompt_tokens ?? 100;
+    const outputTokens = rawUsage?.completion_tokens ?? 100;
+
+    return {
+      answer: content.trim(),
+      usage: {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+      },
+    };
   } finally {
     clearTimeout(timeout);
   }
+}
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "");
-    throw new Error(`Logfare API error (${response.status}): ${errText.slice(0, 200)}`);
+async function aiChatCompletion(env, messages) {
+  // 1. メイン: Logfare (高速軽量モデル llama-3.1-8b-instant / 5000トークン制限)
+  if (env.LOGFARE_API_KEY) {
+    try {
+      return await callChatProvider(
+        "https://logfare.ai/v1/chat/completions",
+        env.LOGFARE_API_KEY,
+        "llama-3.1-8b-instant",
+        messages,
+        "max_tokens",
+        5000
+      );
+    } catch (err) {
+      console.warn("Logfare request failed, falling back to Groq:", err.message);
+    }
   }
 
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  const rawUsage = data?.usage;
-
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("Logfare returned an empty response");
+  // 2. フォールバック: Groq (1200トークン制限)
+  if (env.GROQ_API_KEY) {
+    return await callChatProvider(
+      "https://api.groq.com/openai/v1/chat/completions",
+      env.GROQ_API_KEY,
+      "llama-3.3-70b-versatile",
+      messages,
+      "max_completion_tokens",
+      1200
+    );
   }
 
-  const inputTokens = rawUsage?.prompt_tokens ?? 100;
-  const outputTokens = rawUsage?.completion_tokens ?? 100;
-
-  const usage = {
-    inputTokens,
-    outputTokens,
-    totalTokens: inputTokens + outputTokens,
-  };
-
-  return {
-    answer: content.trim(),
-    usage,
-  };
+  throw new Error("No API key available or all AI providers failed");
 }
 
 async function getOwnedConversation(conversationId, userId, env) {
@@ -1150,7 +1168,7 @@ async function handle(request, env) {
 
       let result;
       try {
-        result = await logfareChatCompletion(env, messages);
+        result = await aiChatCompletion(env, messages);
       } catch (error) {
         if (reservationId) {
           await supabaseRpc(env, "release_chat_credits", { p_reservation_id: reservationId }).catch(e => console.error("Failed to release credits:", e));
