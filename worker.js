@@ -300,7 +300,7 @@ async function groqChatCompletion(env, messages) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "llama-3.1-8b-instant",
+          model: "qwen-3.8-27b",
           messages,
           max_completion_tokens: 1200,
           temperature: 0.6,
