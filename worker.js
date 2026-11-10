@@ -172,17 +172,14 @@ async function requireAgent(request, env) {
     safeEqual(supplied, env.AGENT_SECRET);
 }
 
-// AIに検索の要否を判断させるフィルター関数
 async function shouldSearchWebWithAI(env, query) {
   const text = query.trim().toLowerCase();
   if (!text) return false;
 
-  // 定番の一言・挨拶・雑談は速攻で除外（API呼出省略で高速化）
   if (text.length <= 15 && /^(やあ|こんにちは|こんばんは|おはよう|おはよ|おっす|どうも|お疲れ|おつかれ|ありがとう|ありがと|thx|thanks|hello|hi|hey|おやすみ|またね|ばいばい|bye|暇|ひま|ヒマ|何しよう|なにしよう|何してる|なにしてる|暇つぶし|ひまつぶし)[！!。,.、〜~\s]*$/i.test(text)) {
     return false;
   }
 
-  // 微妙な文脈は AI に検索要否を判断させる
   try {
     const checkMessages = [
       {
@@ -323,7 +320,7 @@ async function logfareChatCompletion(env, messages) {
         body: JSON.stringify({
           model: "logfare/auto",
           messages,
-          max_tokens: 1200,
+          max_tokens: 5000,
           temperature: 0.6,
         }),
         signal: controller.signal,
@@ -542,7 +539,6 @@ function validStats(data) {
      Number.isFinite(Date.parse(data.updated_at)));
 }
 
-// Turnstile 検証ヘルパー関数
 async function verifyTurnstile(token, request, env) {
   if (!token) return false;
   const secret = env.TURNSTILE_SECRET_KEY;
@@ -1127,9 +1123,9 @@ async function handle(request, env) {
 
       if (!isOwner) {
         const inputBytes = encoder.encode(messages.map(m => `${m.role}:${m.content}`).join("\n")).byteLength;
-        const reserveTotal = inputBytes + (messages.length * 32) + 1200;
+        const reserveTotal = inputBytes + (messages.length * 32) + 5000;
 
-        if (reserveTotal > 5000) {
+        if (reserveTotal > 15000) {
           return json({ error: "入力が長すぎます。会話履歴を整理してから再試行してください。" }, 413);
         }
 
