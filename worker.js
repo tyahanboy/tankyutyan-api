@@ -4,13 +4,14 @@ const SESSION_SECONDS = 8 * 60 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function json(data, status = 200) {
+function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
+      ...headers,
     },
   });
 }
@@ -174,7 +175,7 @@ async function requireAgent(request, env) {
 function shouldSearchWeb(query) {
   const text = query.trim().toLowerCase();
   if (!text) return false;
-  if (text.length <= 20 && /^(やあ|こんにちは|こんばんは|おはよう|おはよ|おっす|どうも|お疲れ|おつかれ|ありがとう|ありがと|thx|thanks|hello|hi|hey|おやすみ|またね|ばいばい|bye)[！!。,.、〜~\s]*$/.test(text)) return false;
+  if (text.length <= 20 && /^(やあ|こんにちは|こんばんは|おはよう|おはよ|おっす|どうも|お疲れ|おつかれ|ありがとう|ありがと|thx|thanks|hello|hi|hey|おやすみ|またね|ばいばい|bye)[！!。,.、〜~\s]*$/i.test(text)) return false;
   return true;
 }
 
@@ -271,7 +272,7 @@ async function searchWebWithSerpApi(env, query) {
 }
 
 function buildSearchContext(results) {
-  if (!results.length) {
+  if (!results || !results.length) {
     return "Web検索で有効な検索結果を取得できませんでした。";
   }
 
@@ -328,29 +329,24 @@ async function groqChatCompletion(env, messages) {
     throw new Error("Groq returned an empty response");
   }
 
-  const usage = {
-    inputTokens: rawUsage?.prompt_tokens,
-    outputTokens: rawUsage?.completion_tokens,
-    totalTokens: rawUsage?.total_tokens,
-  };
+  const inputTokens = rawUsage?.prompt_tokens;
+  const outputTokens = rawUsage?.completion_tokens;
 
-  if (
-    !Number.isSafeInteger(usage.inputTokens) ||
-    !Number.isSafeInteger(usage.outputTokens) ||
-    !Number.isSafeInteger(usage.totalTokens) ||
-    usage.inputTokens < 0 ||
-    usage.outputTokens < 0 ||
-    usage.totalTokens !== usage.inputTokens + usage.outputTokens
-  ) {
+  if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens) || inputTokens < 0 || outputTokens < 0) {
     throw new Error("Groq usage data is missing or invalid");
   }
+
+  const usage = {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+  };
 
   return {
     answer: content.trim(),
     usage,
   };
 }
-
 
 async function getOwnedConversation(conversationId, userId, env) {
   if (
@@ -863,7 +859,7 @@ async function handle(request, env) {
     });
   }
 
-    if (path.startsWith("/api/agent/")) {
+  if (path.startsWith("/api/agent/")) {
     if (!(await requireAgent(request, env))) {
       return json({ error: "Unauthorized" }, 401);
     }
@@ -947,9 +943,6 @@ async function handle(request, env) {
     return json({ error: "Not found" }, 404);
   }
 
-
-  // Member chat: retrieve credit status
-  
   // Webマイページ用：自分の活動記録一覧を取得
   if (path === "/api/activities" && method === "GET") {
     const user = await verifyMemberSession(request, env);
@@ -1102,7 +1095,7 @@ async function handle(request, env) {
           searchContext = buildSearchContext(searchResults);
         } catch (error) {
           console.error("SerpApi search failed:", error);
-          return json({ error: "Web検索に失敗しました。時間をおいて再試行してください。" }, 502);
+          searchContext = "Web検索に一時的に失敗したため、最新の検索結果なしで回答します。";
         }
       } else {
         searchContext = "今回は挨拶や雑談のため、Web検索は実行していません。自然で短い会話として返答してください。";
@@ -1113,7 +1106,7 @@ async function handle(request, env) {
           role: "system",
           content: "あなたは探究部の質問アシスタント「たんきゅーちゃん」です。正確で分かりやすい日本語で回答してください。\n\n" + searchContext,
         },
-        ...(Array.isArray(history) ? history.reverse() : [])
+        ...(Array.isArray(history) ? history.slice().reverse() : [])
           .filter(m => ["user", "assistant"].includes(m.role) && typeof m.content === "string"),
         { role: "user", content: content_text },
       ];
@@ -1152,8 +1145,8 @@ async function handle(request, env) {
       try {
         result = await groqChatCompletion(env, messages);
       } catch (error) {
-        if (reservationId && !error.preserveReservation && error.message !== "Groq request timed out") {
-          await supabaseRpc(env, "release_chat_credits", { p_reservation_id: reservationId });
+        if (reservationId) {
+          await supabaseRpc(env, "release_chat_credits", { p_reservation_id: reservationId }).catch(e => console.error("Failed to release credits:", e));
         }
         throw error;
       }
