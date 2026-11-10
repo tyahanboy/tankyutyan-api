@@ -371,7 +371,7 @@ async function aiChatCompletion(env, messages) {
     return await callChatProvider(
       "https://api.groq.com/openai/v1/chat/completions",
       env.GROQ_API_KEY,
-      "llama-3.1-8b-instant",
+      "qwen/qwen-3.8-27b",
       messages,
       "max_completion_tokens",
       1200
