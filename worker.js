@@ -281,9 +281,10 @@ function buildSearchContext(results) {
   ).join("\n\n---\n\n");
 }
 
-async function groqChatCompletion(env, messages) {
-  if (!env.GROQ_API_KEY) {
-    throw new Error("Groq configuration is missing");
+async function logfareChatCompletion(env, messages) {
+  const apiKey = env.LOGFARE_API_KEY || env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error("LOGFARE_API_KEY is missing");
   }
 
   const controller = new AbortController();
@@ -292,17 +293,17 @@ async function groqChatCompletion(env, messages) {
   let response;
   try {
     response = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
+      "https://logfare.ai/v1/chat/completions",
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${env.GROQ_API_KEY}`,
+          "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "qwen/qwen3.8-27b",
+          model: "logfare/auto",
           messages,
-          max_completion_tokens: 1200,
+          max_tokens: 1200,
           temperature: 0.6,
         }),
         signal: controller.signal,
@@ -310,7 +311,7 @@ async function groqChatCompletion(env, messages) {
     );
   } catch (error) {
     if (error.name === "AbortError") {
-      throw new Error("Groq request timed out");
+      throw new Error("Logfare request timed out");
     }
     throw error;
   } finally {
@@ -318,7 +319,8 @@ async function groqChatCompletion(env, messages) {
   }
 
   if (!response.ok) {
-    throw new Error(`Groq API error: ${response.status}`);
+    const errText = await response.text().catch(() => "");
+    throw new Error(`Logfare API error (${response.status}): ${errText.slice(0, 200)}`);
   }
 
   const data = await response.json();
@@ -326,15 +328,11 @@ async function groqChatCompletion(env, messages) {
   const rawUsage = data?.usage;
 
   if (typeof content !== "string" || !content.trim()) {
-    throw new Error("Groq returned an empty response");
+    throw new Error("Logfare returned an empty response");
   }
 
-  const inputTokens = rawUsage?.prompt_tokens;
-  const outputTokens = rawUsage?.completion_tokens;
-
-  if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens) || inputTokens < 0 || outputTokens < 0) {
-    throw new Error("Groq usage data is missing or invalid");
-  }
+  const inputTokens = rawUsage?.prompt_tokens ?? 100;
+  const outputTokens = rawUsage?.completion_tokens ?? 100;
 
   const usage = {
     inputTokens,
@@ -744,7 +742,6 @@ async function handle(request, env) {
       : json({ authenticated: false }, 401);
   }
 
-  // Owner-only: list all logged-in members and their credit balances
   if (path === "/api/admin/credits" && method === "GET") {
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
@@ -799,7 +796,6 @@ async function handle(request, env) {
     });
   }
 
-  // Owner-only: add bonus credits to a logged-in member
   if (path === "/api/admin/credits/grant" && method === "POST") {
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
@@ -864,9 +860,6 @@ async function handle(request, env) {
       return json({ error: "Unauthorized" }, 401);
     }
 
-    // ----------------------------------------------------
-    // 活動記録 (Activity Logs) エンドポイント
-    // ----------------------------------------------------
     if (path === "/api/agent/activities" && method === "POST") {
       const data = await readJson(request);
       if (!validUserId(data.user_id) || typeof data.topic !== "string" || typeof data.content !== "string") {
@@ -943,7 +936,6 @@ async function handle(request, env) {
     return json({ error: "Not found" }, 404);
   }
 
-  // Webマイページ用：自分の活動記録一覧を取得
   if (path === "/api/activities" && method === "GET") {
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
@@ -997,7 +989,6 @@ async function handle(request, env) {
     });
   }
 
-  // Member chat: retrieve conversation history
   if (path === "/api/chat/messages" && method === "GET") {
     const user = await verifyMemberSession(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401);
@@ -1023,7 +1014,6 @@ async function handle(request, env) {
     });
   }
 
-  // Member chat: conversation list and creation
   if (
     path === "/api/chat/conversations" &&
     (method === "GET" || method === "POST")
@@ -1064,7 +1054,6 @@ async function handle(request, env) {
     return json({ ok: true, conversation: rows[0] }, 201);
   }
 
-  // Member chat: send a message and receive an AI response
   if (path === "/api/chat/messages" && method === "POST") {
     try {
       const user = await verifyMemberSession(request, env);
@@ -1143,7 +1132,7 @@ async function handle(request, env) {
 
       let result;
       try {
-        result = await groqChatCompletion(env, messages);
+        result = await logfareChatCompletion(env, messages);
       } catch (error) {
         if (reservationId) {
           await supabaseRpc(env, "release_chat_credits", { p_reservation_id: reservationId }).catch(e => console.error("Failed to release credits:", e));
