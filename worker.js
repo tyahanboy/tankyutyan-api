@@ -350,13 +350,13 @@ async function callChatProvider(url, apiKey, model, messages, maxTokensKey, maxT
 }
 
 async function aiChatCompletion(env, messages) {
-  // 1. メイン: Logfare (高速軽量モデル llama-3.1-8b-instant / 5000トークン制限)
+  // 1. メイン: Logfare (qwen-3.8-27b / 5000トークン制限)
   if (env.LOGFARE_API_KEY) {
     try {
       return await callChatProvider(
         "https://logfare.ai/v1/chat/completions",
         env.LOGFARE_API_KEY,
-        "llama-3.1-8b-instant",
+        "qwen-3.8-27b",
         messages,
         "max_tokens",
         5000
@@ -366,12 +366,12 @@ async function aiChatCompletion(env, messages) {
     }
   }
 
-  // 2. フォールバック: Groq (1200トークン制限)
+  // 2. フォールバック: Groq (llama-3.1-8b-instant / 1200トークン制限)
   if (env.GROQ_API_KEY) {
     return await callChatProvider(
       "https://api.groq.com/openai/v1/chat/completions",
       env.GROQ_API_KEY,
-      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant",
       messages,
       "max_completion_tokens",
       1200
