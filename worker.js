@@ -172,11 +172,31 @@ async function requireAgent(request, env) {
     safeEqual(supplied, env.AGENT_SECRET);
 }
 
-function shouldSearchWeb(query) {
+// AIに検索の要否を判断させるフィルター関数
+async function shouldSearchWebWithAI(env, query) {
   const text = query.trim().toLowerCase();
   if (!text) return false;
-  if (text.length <= 20 && /^(やあ|こんにちは|こんばんは|おはよう|おはよ|おっす|どうも|お疲れ|おつかれ|ありがとう|ありがと|thx|thanks|hello|hi|hey|おやすみ|またね|ばいばい|bye)[！!。,.、〜~\s]*$/i.test(text)) return false;
-  return true;
+
+  // 定番の一言・挨拶・雑談は速攻で除外（API呼出省略で高速化）
+  if (text.length <= 15 && /^(やあ|こんにちは|こんばんは|おはよう|おはよ|おっす|どうも|お疲れ|おつかれ|ありがとう|ありがと|thx|thanks|hello|hi|hey|おやすみ|またね|ばいばい|bye|暇|ひま|ヒマ|何しよう|なにしよう|何してる|なにしてる|暇つぶし|ひまつぶし)[！!。,.、〜~\s]*$/i.test(text)) {
+    return false;
+  }
+
+  // 微妙な文脈は AI に検索要否を判断させる
+  try {
+    const checkMessages = [
+      {
+        role: "system",
+        content: "ユーザーの発言に回答するために「リアルタイムな最新情報、ニュース、店舗情報、事実関係」のWeb検索が必要か判断してください。\n必要なら「YES」、挨拶・雑談・暇つぶし・AIへの相談・一般的な知識などの場合は「NO」とだけ回答してください。"
+      },
+      { role: "user", content: text }
+    ];
+    const res = await logfareChatCompletion(env, checkMessages);
+    return res.answer.toUpperCase().includes("YES");
+  } catch (err) {
+    console.error("AI search judgment failed:", err);
+    return false;
+  }
 }
 
 async function supabase(env, path, options = {}) {
@@ -1078,7 +1098,9 @@ async function handle(request, env) {
       );
 
       let searchContext;
-      if (shouldSearchWeb(content_text)) {
+      const needSearch = await shouldSearchWebWithAI(env, content_text);
+
+      if (needSearch) {
         try {
           const searchResults = await searchWebWithSerpApi(env, content_text);
           searchContext = buildSearchContext(searchResults);
@@ -1087,7 +1109,7 @@ async function handle(request, env) {
           searchContext = "Web検索に一時的に失敗したため、最新の検索結果なしで回答します。";
         }
       } else {
-        searchContext = "今回は挨拶や雑談のため、Web検索は実行していません。自然で短い会話として返答してください。";
+        searchContext = "今回は挨拶や雑談、日常の疑問のため、Web検索は実行していません。自然で親しみやすい回答を心がけてください。";
       }
 
       const messages = [
