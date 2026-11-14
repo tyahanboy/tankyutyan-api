@@ -350,36 +350,19 @@ async function callChatProvider(url, apiKey, model, messages, maxTokensKey, maxT
 }
 
 async function aiChatCompletion(env, messages) {
-  // 0. 自分のTermuxローカルAI (my-ai: KVまたは環境変数からURLを取得)
   const ollamaUrl = (await env.OAUTH_STATE?.get("ollama:url")) || env.OLLAMA_URL;
-  if (ollamaUrl) {
-    try {
-      return await callChatProvider(
-        `${ollamaUrl.replace(/\/+$/, "")}/v1/chat/completions`,
-        "ollama",
-        "my-ai",
-        messages,
-        "max_tokens",
-        2048
-      );
-    } catch (err) {
-      console.warn("Ollama request failed, falling back to Logfare:", err.message);
-    }
+  if (!ollamaUrl) {
+    throw new Error("Ollama URL is not registered. Please start your local bot/tunnel.");
   }
 
-  // 1. メイン/フォールバック: Logfare (qwen-3.8-27b / 5000トークン制限)
-  if (env.LOGFARE_API_KEY) {
-    return await callChatProvider(
-      "https://logfare.ai/v1/chat/completions",
-      env.LOGFARE_API_KEY,
-      "qwen-3.8-27b",
-      messages,
-      "max_tokens",
-      5000
-    );
-  }
-
-  throw new Error("No AI provider available or all AI providers failed");
+  return await callChatProvider(
+    `${ollamaUrl.replace(/\/+$/, "")}/v1/chat/completions`,
+    "ollama",
+    "my-ai",
+    messages,
+    "max_tokens",
+    2048
+  );
 }
 
 async function getOwnedConversation(conversationId, userId, env) {
