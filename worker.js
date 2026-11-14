@@ -350,35 +350,36 @@ async function callChatProvider(url, apiKey, model, messages, maxTokensKey, maxT
 }
 
 async function aiChatCompletion(env, messages) {
-  // 1. メイン: Logfare (qwen-3.8-27b / 5000トークン制限)
-  if (env.LOGFARE_API_KEY) {
+  // 0. 自分のTermuxローカルAI (my-ai: KVまたは環境変数からURLを取得)
+  const ollamaUrl = (await env.OAUTH_STATE?.get("ollama:url")) || env.OLLAMA_URL;
+  if (ollamaUrl) {
     try {
       return await callChatProvider(
-        "https://logfare.ai/v1/chat/completions",
-        env.LOGFARE_API_KEY,
-        "qwen-3.8-27b",
+        `${ollamaUrl.replace(/\/+$/, "")}/v1/chat/completions`,
+        "ollama",
+        "my-ai",
         messages,
         "max_tokens",
-        5000
+        2048
       );
     } catch (err) {
-      console.warn("Logfare request failed, falling back to Groq:", err.message);
+      console.warn("Ollama request failed, falling back to Logfare:", err.message);
     }
   }
 
-  // 2. フォールバック: Groq (llama-3.1-8b-instant / 1200トークン制限)
-  if (env.GROQ_API_KEY) {
+  // 1. メイン/フォールバック: Logfare (qwen-3.8-27b / 5000トークン制限)
+  if (env.LOGFARE_API_KEY) {
     return await callChatProvider(
-      "https://api.groq.com/openai/v1/chat/completions",
-      env.GROQ_API_KEY,
-      "qwen/qwen-3.8-27b",
+      "https://logfare.ai/v1/chat/completions",
+      env.LOGFARE_API_KEY,
+      "qwen-3.8-27b",
       messages,
-      "max_completion_tokens",
-      1200
+      "max_tokens",
+      5000
     );
   }
 
-  throw new Error("No API key available or all AI providers failed");
+  throw new Error("No AI provider available or all AI providers failed");
 }
 
 async function getOwnedConversation(conversationId, userId, env) {
@@ -892,6 +893,17 @@ async function handle(request, env) {
   if (path.startsWith("/api/agent/")) {
     if (!(await requireAgent(request, env))) {
       return json({ error: "Unauthorized" }, 401);
+    }
+
+    if (path === "/api/agent/ollama-url" && method === "POST") {
+      const data = await readJson(request);
+      if (typeof data.url !== "string" || !data.url.startsWith("https://")) {
+        return json({ error: "Invalid url" }, 400);
+      }
+      await env.OAUTH_STATE.put("ollama:url", data.url.replace(/\/+$/, ""), {
+        expirationTtl: 86400,
+      });
+      return json({ ok: true });
     }
 
     if (path === "/api/agent/activities" && method === "POST") {
