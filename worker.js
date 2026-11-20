@@ -1,5 +1,6 @@
 const SESSION_COOKIE = "tankyutyan_session";
 const STATE_COOKIE = "tankyutyan_oauth_state";
+const DELETE_OAUTH_COOKIE = "tankyutyan_delete_oauth_state";
 const SESSION_SECONDS = 8 * 60 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -164,6 +165,34 @@ async function readJson(request) {
 
 function validUserId(id) {
   return typeof id === "string" && /^\d{17,20}$/.test(id);
+}
+const DELETION_CATEGORIES = new Set([
+  "conversations",
+  "activity_logs",
+  "user_profiles",
+  "user_power_settings",
+  "chat_usage_logs",
+  "chat_credit_reservations",
+]);
+
+const DELETE_REQUEST_SECONDS = 10 * 60;
+
+function validDeletionCategories(value) {
+  return Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= DELETION_CATEGORIES.size &&
+    value.every(item =>
+      typeof item === "string" && DELETION_CATEGORIES.has(item)
+    ) &&
+    new Set(value).size === value.length;
+}
+
+async function getDeletionRequest(env, requestId) {
+  const rows = await supabase(
+    env,
+    `deletion_requests?request_id=eq.${encodeURIComponent(requestId)}&select=request_id,user_id,categories,verification_code_hash,oauth_verified,code_verified,attempts,status,expires_at&limit=1`
+  );
+  return rows?.[0] || null;
 }
 
 async function requireAgent(request, env) {
@@ -621,10 +650,135 @@ async function handle(request, env) {
     );
   }
 
+  if (path === "/api/delete/auth" && method === "GET") {
+    const requestId = url.searchParams.get("request_id");
+    if (!requestId || requestId.length > 100) {
+      return json({ error: "Invalid request" }, 400);
+    }
+
+    const deletion = await getDeletionRequest(env, requestId);
+    if (
+      !deletion ||
+      deletion.status !== "pending" ||
+      Date.parse(deletion.expires_at) <= Date.now()
+    ) {
+      return json({ error: "Request expired or unavailable" }, 400);
+    }
+
+    const stateBytes = crypto.getRandomValues(new Uint8Array(32));
+    const state = base64url(stateBytes);
+
+    await env.OAUTH_STATE.put(
+      `delete-oauth:${state}`,
+      JSON.stringify({
+        request_id: requestId,
+        user_id: deletion.user_id,
+      }),
+      { expirationTtl: 300 }
+    );
+
+    const params = new URLSearchParams({
+      client_id: env.DISCORD_CLIENT_ID,
+      redirect_uri: env.DISCORD_CALLBACK_URL,
+      response_type: "code",
+      scope: "identify guilds",
+      state,
+    });
+
+    return redirect(
+      `https://discord.com/oauth2/authorize?${params}`,
+      cookie(DELETE_OAUTH_COOKIE, state, 300)
+    );
+  }
+
   if (path === "/api/auth/callback" && method === "GET") {
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
     const stateCookie = readCookies(request)[STATE_COOKIE];
+    const deleteStateCookie = readCookies(request)[DELETE_OAUTH_COOKIE];
+
+    if (code && state && deleteStateCookie && safeEqual(state, deleteStateCookie)) {
+      const storedRaw = await env.OAUTH_STATE.get(`delete-oauth:${state}`);
+      await env.OAUTH_STATE.delete(`delete-oauth:${state}`);
+      const clearDeleteCookie = cookie(DELETE_OAUTH_COOKIE, "", 0);
+
+      if (!storedRaw) {
+        return redirect(`${appOrigin}/?delete_auth=failed`, clearDeleteCookie);
+      }
+
+      let deletionState;
+      try { deletionState = JSON.parse(storedRaw); } catch { deletionState = null; }
+
+      if (!deletionState || !validUserId(deletionState.user_id) || typeof deletionState.request_id !== "string") {
+        return redirect(`${appOrigin}/?delete_auth=failed`, clearDeleteCookie);
+      }
+
+      const tokenResponse = await fetch("https://discord.com/api/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: env.DISCORD_CLIENT_ID,
+          client_secret: env.DISCORD_CLIENT_SECRET,
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: env.DISCORD_CALLBACK_URL,
+        }),
+      });
+
+      if (!tokenResponse.ok) {
+        return redirect(`${appOrigin}/?delete_auth=failed`, clearDeleteCookie);
+      }
+
+      const tokenData = await tokenResponse.json();
+      const authHeaders = { Authorization: `Bearer ${tokenData.access_token}` };
+
+      const [userResponse, guildsResponse] = await Promise.all([
+        fetch("https://discord.com/api/users/@me", { headers: authHeaders }),
+        fetch("https://discord.com/api/users/@me/guilds", { headers: authHeaders }),
+      ]);
+
+      if (!userResponse.ok || !guildsResponse.ok) {
+        return redirect(`${appOrigin}/?delete_auth=failed`, clearDeleteCookie);
+      }
+
+      const oauthUser = await userResponse.json();
+      const guilds = await guildsResponse.json();
+
+      if (
+        !oauthUser ||
+        oauthUser.id !== deletionState.user_id ||
+        !Array.isArray(guilds) ||
+        !guilds.some(guild => guild.id === env.DISCORD_GUILD_ID)
+      ) {
+        return redirect(`${appOrigin}/?delete_auth=mismatch`, clearDeleteCookie);
+      }
+
+      const current = await getDeletionRequest(env, deletionState.request_id);
+
+      if (
+        !current ||
+        current.user_id !== oauthUser.id ||
+        current.status !== "pending" ||
+        Date.parse(current.expires_at) <= Date.now()
+      ) {
+        return redirect(`${appOrigin}/?delete_auth=failed`, clearDeleteCookie);
+      }
+
+      await supabase(
+        env,
+        `deletion_requests?request_id=eq.${encodeURIComponent(deletionState.request_id)}&status=eq.pending`,
+        {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            oauth_verified: true,
+            status: current.code_verified ? "verified" : "pending",
+          }),
+        }
+      );
+
+      return redirect(`${appOrigin}/?delete_auth=success`, clearDeleteCookie);
+    }
 
     if (
       !code || !state || !stateCookie ||
@@ -959,6 +1113,208 @@ async function handle(request, env) {
       return json(await writeUserPower(
         data.user_id, data.reasoning_effort, env
       ));
+    }
+
+    if (path === "/api/agent/deletion/create" && method === "POST") {
+      const data = await readJson(request);
+      if (!validUserId(data.user_id)) {
+        return json({ error: "Invalid user_id" }, 400);
+      }
+
+      const active = await supabase(
+        env,
+        `deletion_requests?user_id=eq.${encodeURIComponent(data.user_id)}&status=in.(pending,verified,processing)&select=request_id&limit=1`
+      );
+      if (active?.length) {
+        return json({ error: "An active deletion request already exists" }, 409);
+      }
+
+      const requestId = crypto.randomUUID();
+      const code = String(
+        crypto.getRandomValues(new Uint32Array(1))[0] % 10000
+      ).padStart(4, "0");
+
+      const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(env.SESSION_SECRET),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const digest = await crypto.subtle.sign(
+        "HMAC",
+        key,
+        new TextEncoder().encode(`${requestId}:${code}`)
+      );
+      const codeHash = Array.from(new Uint8Array(digest))
+        .map(byte => byte.toString(16).padStart(2, "0"))
+        .join("");
+
+      const expiresAt = new Date(
+        Date.now() + DELETE_REQUEST_SECONDS * 1000
+      ).toISOString();
+
+      await supabase(env, "deletion_requests", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          request_id: requestId,
+          user_id: data.user_id,
+          categories: [],
+          verification_code_hash: codeHash,
+          expires_at: expiresAt,
+        }),
+      });
+
+      const authUrl = `${new URL(request.url).origin}/api/delete/auth?request_id=${encodeURIComponent(requestId)}`;
+      return json({ ok: true, request_id: requestId, code, auth_url: authUrl });
+    }
+
+    if (path === "/api/agent/deletion/categories" && method === "POST") {
+      const data = await readJson(request);
+      if (
+        typeof data.request_id !== "string" ||
+        !validUserId(data.user_id) ||
+        !validDeletionCategories(data.categories)
+      ) {
+        return json({ error: "Invalid payload" }, 400);
+      }
+
+      const current = await getDeletionRequest(env, data.request_id);
+      if (
+        !current ||
+        current.user_id !== data.user_id ||
+        current.status !== "pending" ||
+        Date.parse(current.expires_at) <= Date.now()
+      ) {
+        return json({ error: "Request unavailable" }, 404);
+      }
+
+      await supabase(
+        env,
+        `deletion_requests?request_id=eq.${encodeURIComponent(data.request_id)}&user_id=eq.${encodeURIComponent(data.user_id)}`,
+        {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ categories: data.categories }),
+        }
+      );
+      return json({ ok: true });
+    }
+
+    if (path === "/api/agent/deletion/verify-code" && method === "POST") {
+      const data = await readJson(request);
+      if (
+        typeof data.request_id !== "string" ||
+        !validUserId(data.user_id) ||
+        typeof data.code !== "string" ||
+        !/^\d{4}$/.test(data.code)
+      ) {
+        return json({ error: "Invalid payload" }, 400);
+      }
+
+      const current = await getDeletionRequest(env, data.request_id);
+      if (
+        !current ||
+        current.user_id !== data.user_id ||
+        current.status !== "pending" ||
+        Date.parse(current.expires_at) <= Date.now()
+      ) {
+        return json({ error: "Request unavailable" }, 404);
+      }
+
+      const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(env.SESSION_SECRET),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const digest = await crypto.subtle.sign(
+        "HMAC",
+        key,
+        new TextEncoder().encode(`${data.request_id}:${data.code}`)
+      );
+      const codeHash = Array.from(new Uint8Array(digest))
+        .map(byte => byte.toString(16).padStart(2, "0"))
+        .join("");
+
+      const result = await supabaseRpc(env, "verify_deletion_code", {
+        p_request_id: data.request_id,
+        p_code_hash: codeHash,
+      });
+      return json(result || { ok: false });
+    }
+
+    if (path === "/api/agent/deletion/status" && method === "POST") {
+      const data = await readJson(request);
+      if (typeof data.request_id !== "string" || !validUserId(data.user_id)) {
+        return json({ error: "Invalid payload" }, 400);
+      }
+
+      const current = await getDeletionRequest(env, data.request_id);
+      if (!current || current.user_id !== data.user_id) {
+        return json({ error: "Request not found" }, 404);
+      }
+
+      return json({
+        ok: true,
+        status: current.status,
+        oauth_verified: current.oauth_verified,
+        code_verified: current.code_verified,
+        categories: current.categories,
+        expires_at: current.expires_at,
+      });
+    }
+
+    if (path === "/api/agent/deletion/execute" && method === "POST") {
+      const data = await readJson(request);
+      if (typeof data.request_id !== "string" || !validUserId(data.user_id)) {
+        return json({ error: "Invalid payload" }, 400);
+      }
+
+      const current = await getDeletionRequest(env, data.request_id);
+      if (
+        !current ||
+        current.user_id !== data.user_id ||
+        current.status !== "verified" ||
+        !current.oauth_verified ||
+        !current.code_verified ||
+        Date.parse(current.expires_at) <= Date.now()
+      ) {
+        return json({ error: "Request is not verified" }, 403);
+      }
+
+      const result = await supabaseRpc(env, "execute_deletion_request", {
+        p_request_id: data.request_id,
+      });
+      return json(result || { ok: false });
+    }
+
+    if (path === "/api/agent/deletion/cancel" && method === "POST") {
+      const data = await readJson(request);
+      if (typeof data.request_id !== "string" || !validUserId(data.user_id)) {
+        return json({ error: "Invalid payload" }, 400);
+      }
+
+      const current = await getDeletionRequest(env, data.request_id);
+      if (!current || current.user_id !== data.user_id) {
+        return json({ error: "Request not found" }, 404);
+      }
+      if (current.status !== "pending" && current.status !== "verified") {
+        return json({ error: "Request cannot be cancelled" }, 409);
+      }
+
+      await supabase(
+        env,
+        `deletion_requests?request_id=eq.${encodeURIComponent(data.request_id)}&user_id=eq.${encodeURIComponent(data.user_id)}`,
+        {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ status: "cancelled" }),
+        }
+      );
+      return json({ ok: true });
     }
 
     return json({ error: "Not found" }, 404);
