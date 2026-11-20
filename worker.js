@@ -777,7 +777,35 @@ async function handle(request, env) {
         }
       );
 
-      return redirect(`${appOrigin}/?delete_auth=success`, clearDeleteCookie);
+      const headers = new Headers({
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+      });
+      headers.append("Set-Cookie", clearDeleteCookie);
+
+      return new Response(`<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本人確認完了</title>
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f3ff;font-family:system-ui,sans-serif;color:#292442}
+main{margin:24px;padding:32px 24px;max-width:360px;width:calc(100% - 96px);background:white;border-radius:20px;text-align:center;box-shadow:0 8px 30px #29244218}
+h1{font-size:23px}
+p{line-height:1.8;color:#625d70}
+</style>
+</head>
+<body>
+<main>
+<h1>本人確認が完了したよ！🔐</h1>
+<p>Discordに戻って、削除申請を続けてね。</p>
+</main>
+</body>
+</html>`, { status: 200, headers });
     }
 
     if (
