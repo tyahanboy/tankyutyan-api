@@ -350,17 +350,16 @@ async function callChatProvider(url, apiKey, model, messages, maxTokensKey, maxT
 }
 
 async function aiChatCompletion(env, messages) {
-  const ollamaUrl = (await env.OAUTH_STATE?.get("ollama:url")) || env.OLLAMA_URL;
-  if (!ollamaUrl) {
-    throw new Error("Ollama URL is not registered. Please start your local bot/tunnel.");
+  if (!env.GROQ_API_KEY) {
+    throw new Error("GROQ_API_KEY is missing");
   }
 
   return await callChatProvider(
-    `${ollamaUrl.replace(/\/+$/, "")}/v1/chat/completions`,
-    "ollama",
-    "my-ai",
+    "https://api.groq.com/openai/v1/chat/completions",
+    env.GROQ_API_KEY,
+    "openai/gpt-oss-120b",
     messages,
-    "max_tokens",
+    "max_completion_tokens",
     2048
   );
 }
