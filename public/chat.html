@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#eff6ff">
-  <meta name="description" content="たんきゅーちゃん 利用者向けチャット">
+  <meta name="description" content="たんきゅーちゃん リアルタイム＆AIチャット">
   <title>たんきゅーちゃん | チャット</title>
   <style>
     :root {
@@ -19,48 +19,83 @@
       align-items: center; justify-content: space-between;
       background: #fff; border-bottom: 1px solid #e5ecf8;
     }
-    .brand { font-weight: 800; color: #4778c8; font-size: 19px; }
+    .brand { font-weight: 800; color: #4778c8; font-size: 19px; text-align: center; }
     .brand small { display: block; font-size: 10px; color: #91a3bd; }
     button {
       border: 0; border-radius: 12px; padding: 11px 16px;
       background: #5b8def; color: white; font-weight: 700;
-      cursor: pointer;
+      cursor: pointer; transition: opacity .15s;
     }
     button:disabled { opacity: .5; cursor: wait; }
     .secondary { background: #eaf1ff; color: #4778c8; }
     main {
       max-width: 1100px; margin: 24px auto; padding: 0 16px;
-      display: grid; grid-template-columns: 260px 1fr; gap: 18px;
+      display: grid; grid-template-columns: 270px 1fr; gap: 18px;
     }
     .panel {
       background: white; border: 1px solid #e5ecf8;
       border-radius: 18px; box-shadow: 0 5px 20px #365b9610;
     }
     aside { padding: 16px; }
-    h2 { font-size: 15px; margin: 4px 0 14px; }
-    #conversationList { display: grid; gap: 8px; margin-top: 14px; }
+    h2 { font-size: 14px; margin: 4px 0 10px; color: #536783; }
+
+    .mode-tabs {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+      background: #f0f5ff; padding: 5px; border-radius: 14px;
+      margin-bottom: 16px;
+    }
+    .mode-tab {
+      padding: 9px 8px; border-radius: 10px; font-size: 12px;
+      background: transparent; color: #536783; font-weight: 700;
+    }
+    .mode-tab.active {
+      background: #5b8def; color: #fff;
+      box-shadow: 0 2px 8px rgba(91, 141, 239, 0.3);
+    }
+
+    #conversationList { display: grid; gap: 8px; margin-top: 12px; }
     .conversation {
       width: 100%; text-align: left; background: #f5f8ff;
       color: #536783; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap;
+      white-space: nowrap; font-size: 13px;
     }
     .conversation.active { background: #e7efff; color: #376cc2; }
+
+    .online-box {
+      padding: 12px; border-radius: 14px; background: #f5f8ff;
+      font-size: 12px; line-height: 1.7;
+    }
+    .online-dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; background: #22c55e; margin-right: 6px;
+    }
+    .online-dot.off { background: #f59e0b; }
+
     .credit {
-      margin-top: 20px; padding: 14px; border-radius: 14px;
+      margin-top: 16px; padding: 14px; border-radius: 14px;
       background: #f5f8ff; font-size: 12px; line-height: 1.8;
     }
     .credit strong { color: #4778c8; }
-    #chat { min-height: 70vh; display: flex; flex-direction: column; }
-    .chat-head { padding: 18px 20px; border-bottom: 1px solid #edf1f8; }
+
+    #chat { min-height: 72vh; display: flex; flex-direction: column; }
+    .chat-head {
+      padding: 16px 20px; border-bottom: 1px solid #edf1f8;
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    }
     .chat-head strong { font-size: 16px; }
-    .chat-head small { display: block; color: #91a0b5; margin-top: 4px; }
+    .chat-head small { display: block; color: #91a0b5; margin-top: 3px; }
+    .ws-badge {
+      font-size: 11px; padding: 4px 10px; border-radius: 999px;
+      background: #eaf1ff; color: #4778c8; font-weight: 700; white-space: nowrap;
+    }
+
     #messages {
-      flex: 1; padding: 20px; display: flex; flex-direction: column;
-      gap: 14px; overflow-y: auto; min-height: 350px;
+      flex: 1; padding: 18px 20px; display: flex; flex-direction: column;
+      gap: 14px; overflow-y: auto; max-height: 60vh; min-height: 360px;
     }
     .message {
       max-width: 82%; padding: 12px 15px; border-radius: 16px;
-      white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7;
+      white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65;
       font-size: 14px;
     }
     .message.user {
@@ -75,14 +110,49 @@
       align-self: center; color: #8291a8; background: transparent;
       font-size: 12px; text-align: center;
     }
-    .composer {
-      padding: 16px; border-top: 1px solid #edf1f8;
-      display: flex; gap: 10px; align-items: flex-end;
+
+    .rt-row {
+      display: flex; gap: 10px; align-items: flex-start; max-width: 88%;
     }
+    .rt-row.mine {
+      align-self: flex-end; flex-direction: row-reverse;
+    }
+    .rt-avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: #dbeafe; color: #3b82f6; font-weight: 800;
+      display: grid; place-items: center; flex-shrink: 0;
+      overflow: hidden; font-size: 14px;
+    }
+    .rt-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .rt-body { display: flex; flex-direction: column; gap: 3px; }
+    .rt-row.mine .rt-body { align-items: flex-end; }
+    .rt-meta {
+      font-size: 11px; color: #7b8ba3; display: flex; align-items: center; gap: 6px;
+    }
+    .role-tag {
+      font-size: 9px; padding: 1px 5px; border-radius: 4px;
+      background: #fef3c7; color: #b45309; font-weight: 800;
+    }
+    .rt-bubble {
+      padding: 10px 14px; border-radius: 16px; background: #f3f6fb;
+      color: #24324b; font-size: 14px; line-height: 1.6;
+      white-space: pre-wrap; overflow-wrap: anywhere;
+      border-top-left-radius: 4px;
+    }
+    .rt-row.mine .rt-bubble {
+      background: #5b8def; color: #fff;
+      border-top-left-radius: 16px; border-top-right-radius: 4px;
+    }
+
+    .composer {
+      padding: 14px 16px; border-top: 1px solid #edf1f8;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .composer-row { display: flex; gap: 10px; align-items: flex-end; }
     textarea {
-      flex: 1; resize: vertical; min-height: 48px; max-height: 150px;
+      flex: 1; resize: vertical; min-height: 46px; max-height: 140px;
       border: 1px solid #dce6f5; border-radius: 13px;
-      padding: 13px; font: inherit; outline: none;
+      padding: 12px; font: inherit; outline: none;
     }
     textarea:focus { border-color: #7ca5ef; }
     #login {
@@ -90,7 +160,7 @@
       text-align: center;
     }
     #login p { color: #7b8ba3; line-height: 1.8; }
-    #status { color: #8291a8; font-size: 12px; padding: 0 18px 12px; }
+    #status { color: #8291a8; font-size: 12px; padding: 4px 18px 6px; min-height: 22px; }
     [hidden] { display: none !important; }
     @media (max-width: 700px) {
       main { grid-template-columns: 1fr; margin: 12px auto; }
@@ -98,9 +168,9 @@
       #conversationList { display: flex; overflow-x: auto; }
       .conversation { min-width: 150px; }
       .credit { margin-top: 12px; }
-      #chat { min-height: 65vh; }
-      #messages { min-height: 280px; padding: 14px; }
-      .message { max-width: 92%; }
+      #chat { min-height: 68vh; }
+      #messages { min-height: 300px; max-height: 55vh; padding: 14px; }
+      .message, .rt-row { max-width: 94%; }
     }
   </style>
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -114,47 +184,77 @@
 
   <section id="login" class="panel" hidden>
     <h2>たんきゅーちゃんとお話ししよう！</h2>
-    <p>チャットを利用するにはDiscordアカウントでログインしてください。</p>
+    <p>チャットを利用するには人間チェックを完了してDiscordでログインしてください。</p>
+    <div style="display:flex;justify-content:center;margin:16px 0;">
+      <div class="cf-turnstile" id="loginTurnstile" data-sitekey="0x4AAAAAAF15uOl7-kzQvwHU" data-theme="light"></div>
+    </div>
     <button id="loginButton">Discordでログイン</button>
   </section>
 
   <main id="app" hidden>
     <aside class="panel">
-      <button id="newConversation" style="width:100%">＋ 新しい会話</button>
-      <h2 style="margin-top:22px">会話履歴</h2>
-      <div id="conversationList"></div>
+      <div class="mode-tabs">
+        <button type="button" class="mode-tab active" id="tabRealtime">🌐 リアルタイム</button>
+        <button type="button" class="mode-tab" id="tabAi">🤖 AI質問</button>
+      </div>
+
+      <div id="realtimeSide">
+        <div class="online-box">
+          <div><span class="online-dot" id="onlineDot"></span><strong id="onlineCount">接続中…</strong></div>
+          <div id="onlineUsers" style="color:#64748b;margin-top:4px;font-size:11px;"></div>
+        </div>
+        <h2 style="margin-top:16px">チャンネル</h2>
+        <button type="button" class="conversation active">＃ 雑談・探究ロビー</button>
+      </div>
+
+      <div id="aiSide" hidden>
+        <button id="newConversation" style="width:100%">＋ 新しい会話</button>
+        <h2 style="margin-top:18px">会話履歴</h2>
+        <div id="conversationList"></div>
+      </div>
+
       <div class="credit" id="creditBox">クレジットを読み込み中…</div>
     </aside>
 
     <section id="chat" class="panel">
       <div class="chat-head">
-        <strong id="chatTitle">新しい会話</strong>
-        <small id="userName"></small>
+        <div>
+          <strong id="chatTitle">＃ 雑談・探究ロビー（リアルタイム）</strong>
+          <small id="userName"></small>
+        </div>
+        <span class="ws-badge" id="wsBadge">WebSocket 接続中</span>
       </div>
-      <div id="messages">
-        <div class="message system">会話を選ぶか、新しい会話を始めてね！</div>
-      </div>
+      <div id="messages"></div>
       <div id="status" role="status"></div>
       <form class="composer" id="composer">
-        <textarea id="input" maxlength="4000" placeholder="質問を入力してね…" required></textarea>
-        <button id="send" type="submit">送信</button>
-      
-      <!-- Turnstile ウィジェット -->
-      <div class="cf-turnstile my-2" data-sitekey="0x4AAAAAAF15uOl7-kzQvwHU" data-theme="dark"></div>
-    </form>
+        <div class="composer-row">
+          <textarea id="input" maxlength="1000" placeholder="みんなにメッセージを送る…" required></textarea>
+          <button id="send" type="submit">送信</button>
+        </div>
+      </form>
     </section>
   </main>
 
 <script>
 const $ = id => document.getElementById(id);
+let currentMode = "realtime";
+let currentUser = null;
 let currentConversation = null;
 let sending = false;
+
+let ws = null;
+let lastRealtimeId = 0;
+let renderedRealtimeIds = new Set();
+let typingTimer = null;
+let lastTypingSent = 0;
+let syncTimer = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: "same-origin",
     ...options,
-    headers: { ...(options.body ? { "Content-Type": "application/json", "X-Turnstile-Token": (typeof turnstile !== "undefined" ? turnstile.getResponse() : "") } : {}),
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {})
     }
   });
@@ -168,7 +268,135 @@ async function api(path, options = {}) {
   return data;
 }
 
-function showMessage(role, content) {
+function setStatus(text) { $("status").textContent = text; }
+
+function formatTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+function appendRealtimeMessage(msg) {
+  if (!msg || renderedRealtimeIds.has(msg.id)) return;
+  renderedRealtimeIds.add(msg.id);
+  if (msg.id > lastRealtimeId) lastRealtimeId = msg.id;
+
+  if (currentMode !== "realtime") return;
+
+  const isMine = currentUser && msg.user_id === currentUser.id;
+  const row = document.createElement("div");
+  row.className = "rt-row" + (isMine ? " mine" : "");
+
+  const avatar = document.createElement("div");
+  avatar.className = "rt-avatar";
+  if (msg.avatar) {
+    const img = document.createElement("img");
+    img.src = `https://cdn.discordapp.com/avatars/${encodeURIComponent(msg.user_id)}/${encodeURIComponent(msg.avatar)}.png?size=64`;
+    img.alt = "";
+    avatar.appendChild(img);
+  } else {
+    avatar.textContent = (msg.display_name || "?").slice(0, 1);
+  }
+
+  const body = document.createElement("div");
+  body.className = "rt-body";
+
+  const meta = document.createElement("div");
+  meta.className = "rt-meta";
+  const nameSpan = document.createElement("span");
+  nameSpan.textContent = msg.display_name || "メンバー";
+  meta.appendChild(nameSpan);
+
+  if (msg.role === "owner" || msg.role === "admin") {
+    const badge = document.createElement("span");
+    badge.className = "role-tag";
+    badge.textContent = msg.role.toUpperCase();
+    meta.appendChild(badge);
+  }
+
+  const timeSpan = document.createElement("span");
+  timeSpan.textContent = formatTime(msg.created_at);
+  meta.appendChild(timeSpan);
+
+  const bubble = document.createElement("div");
+  bubble.className = "rt-bubble";
+  bubble.textContent = msg.content;
+
+  body.appendChild(meta);
+  body.appendChild(bubble);
+  row.appendChild(avatar);
+  row.appendChild(body);
+
+  $("messages").appendChild(row);
+  $("messages").scrollTop = $("messages").scrollHeight;
+}
+
+async function loadRealtimeHistory(isDiff = false) {
+  try {
+    const qs = isDiff && lastRealtimeId > 0
+      ? `?room=general&after_id=${lastRealtimeId}`
+      : `?room=general`;
+    const data = await api("/api/realtime/messages" + qs);
+    if (!isDiff) {
+      $("messages").replaceChildren();
+      renderedRealtimeIds.clear();
+      lastRealtimeId = 0;
+      if (!data.messages.length) {
+        const sys = document.createElement("div");
+        sys.className = "message system";
+        sys.textContent = "まだメッセージがありません。最初のひとことを送ってみよう！";
+        $("messages").appendChild(sys);
+      }
+    }
+    for (const m of data.messages) {
+      const firstSys = $("messages").querySelector(".message.system");
+      if (firstSys) firstSys.remove();
+      appendRealtimeMessage(m);
+    }
+  } catch (err) {
+    if (!isDiff) setStatus("履歴の読み込みに失敗しました: " + err.message);
+  }
+}
+
+function connectWebSocket() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${proto}//${location.host}/api/realtime/ws`);
+
+  ws.onopen = () => {
+    $("wsBadge").textContent = "🟢 リアルタイム接続中";
+    $("onlineDot").classList.remove("off");
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === "message" && data.message) {
+        const firstSys = $("messages").querySelector(".message.system");
+        if (firstSys) firstSys.remove();
+        appendRealtimeMessage(data.message);
+      } else if (data.type === "presence") {
+        $("onlineCount").textContent = `オンライン: ${data.count}人`;
+        $("onlineUsers").textContent = (data.users || []).map(u => u.name).join("、");
+      } else if (data.type === "typing" && currentMode === "realtime") {
+        if (currentUser && data.user_id !== currentUser.id) {
+          setStatus(`${data.display_name} さんが入力中…`);
+          clearTimeout(typingTimer);
+          typingTimer = setTimeout(() => setStatus(""), 2500);
+        }
+      }
+    } catch {}
+  };
+
+  ws.onclose = () => {
+    $("wsBadge").textContent = "🟡 再接続中…";
+    $("onlineDot").classList.add("off");
+    setTimeout(connectWebSocket, 3000);
+  };
+}
+
+function showAiMessage(role, content) {
   const item = document.createElement("div");
   item.className = `message ${role}`;
   item.textContent = content;
@@ -176,13 +404,11 @@ function showMessage(role, content) {
   $("messages").scrollTop = $("messages").scrollHeight;
 }
 
-function setStatus(text) { $("status").textContent = text; }
-
 async function loadCredits() {
   try {
     const data = await api("/api/chat/credits");
     if (data.is_unlimited) {
-      $("creditBox").innerHTML = "<strong>クレジット</strong><br>無制限（Owner）";
+      $("creditBox").innerHTML = "<strong>AIクレジット</strong><br>無制限（Owner）";
       return;
     }
     const c = data.credits;
@@ -197,12 +423,12 @@ async function loadCredits() {
     const bonus = Number(c.bonus_credits || 0);
     const overage = Number(c.overage_credits || 0);
     $("creditBox").innerHTML =
-      `<strong>クレジット残量</strong><br>` +
+      `<strong>AIクレジット残量</strong><br>` +
       `今日：${dailyLeft.toLocaleString()} / ${Number(c.daily_limit).toLocaleString()}<br>` +
       `今月：${monthlyLeft.toLocaleString()} / ${Number(c.monthly_limit).toLocaleString()}<br>` +
       `ボーナス：${bonus.toLocaleString()}<br>` +
       (overage > 0 ? `<span style="color:#d65b65">未精算：${overage.toLocaleString()}</span>` : "");
-  } catch (error) {
+  } catch {
     $("creditBox").textContent = "クレジット情報を取得できませんでした。";
   }
 }
@@ -228,10 +454,10 @@ async function openConversation(id) {
   $("chatTitle").textContent = data.conversation.title || "新しい会話";
   $("messages").replaceChildren();
   for (const message of data.messages) {
-    showMessage(message.role === "user" ? "user" : "assistant", message.content);
+    showAiMessage(message.role === "user" ? "user" : "assistant", message.content);
   }
   if (!data.messages.length) {
-    showMessage("system", "ここから会話を始めよう！");
+    showAiMessage("system", "ここからたんきゅーちゃんに質問しよう！");
   }
   await loadConversations();
   setStatus("");
@@ -245,27 +471,95 @@ async function createConversation() {
   await openConversation(data.conversation.id);
 }
 
-function errorText(error) {
-  if (error.reason === "daily_limit") return "本日の利用上限に達しました。";
-  if (error.reason === "overage_unpaid") return "未精算の超過利用分があるため、現在利用できません。管理者に連絡してください。";
-  if (error.status === 429) return "クレジットが不足しています。";
-  if (error.status === 401) return "ログイン状態を確認できません。再ログインしてください。";
-  return error.message || "エラーが発生しました。";
+async function switchMode(mode) {
+  currentMode = mode;
+  setStatus("");
+  if (mode === "realtime") {
+    $("tabRealtime").classList.add("active");
+    $("tabAi").classList.remove("active");
+    $("realtimeSide").hidden = false;
+    $("aiSide").hidden = true;
+    $("wsBadge").hidden = false;
+    $("chatTitle").textContent = "＃ 雑談・探究ロビー（リアルタイム）";
+    $("input").maxLength = 1000;
+    $("input").placeholder = "みんなにメッセージを送る…";
+    await loadRealtimeHistory(false);
+  } else {
+    $("tabAi").classList.add("active");
+    $("tabRealtime").classList.remove("active");
+    $("realtimeSide").hidden = true;
+    $("aiSide").hidden = false;
+    $("wsBadge").hidden = true;
+    $("input").maxLength = 4000;
+    $("input").placeholder = "たんきゅーちゃんに質問を入力してね…";
+    await loadConversations();
+    const first = $("conversationList").querySelector("button");
+    if (first) {
+      await first.click();
+    } else {
+      $("chatTitle").textContent = "新しい会話（AI質問）";
+      $("messages").replaceChildren();
+      showAiMessage("system", "「＋ 新しい会話」を押すか、そのまま質問を送ってね！");
+    }
+  }
 }
+
+$("tabRealtime").onclick = () => switchMode("realtime");
+$("tabAi").onclick = () => switchMode("ai");
+
+$("input").addEventListener("input", () => {
+  if (currentMode === "realtime" && ws && ws.readyState === WebSocket.OPEN) {
+    const now = Date.now();
+    if (now - lastTypingSent > 2000) {
+      lastTypingSent = now;
+      ws.send(JSON.stringify({ type: "typing" }));
+    }
+  }
+});
 
 $("composer").addEventListener("submit", async event => {
   event.preventDefault();
   const content = $("input").value.trim();
   if (!content || sending) return;
-  if (!currentConversation) {
-    try { await createConversation(); }
-    catch (error) { setStatus(errorText(error)); return; }
-  }
 
   sending = true;
   $("send").disabled = true;
   $("input").disabled = true;
-  showMessage("user", content);
+
+  if (currentMode === "realtime") {
+    try {
+      $("input").value = "";
+      const data = await api("/api/realtime/messages", {
+        method: "POST",
+        body: JSON.stringify({ room: "general", content })
+      });
+      if (data.message) {
+        const firstSys = $("messages").querySelector(".message.system");
+        if (firstSys) firstSys.remove();
+        appendRealtimeMessage(data.message);
+      }
+      setStatus("");
+    } catch (error) {
+      setStatus(error.message || "送信に失敗しました");
+    } finally {
+      sending = false;
+      $("send").disabled = false;
+      $("input").disabled = false;
+      $("input").focus();
+    }
+    return;
+  }
+
+  if (!currentConversation) {
+    try { await createConversation(); }
+    catch (error) {
+      setStatus(error.message);
+      sending = false; $("send").disabled = false; $("input").disabled = false;
+      return;
+    }
+  }
+
+  showAiMessage("user", content);
   $("input").value = "";
   setStatus("たんきゅーちゃんが考え中…");
 
@@ -277,12 +571,12 @@ $("composer").addEventListener("submit", async event => {
         content
       })
     });
-    showMessage("assistant", data.answer);
+    showAiMessage("assistant", data.answer);
     setStatus("");
     await loadConversations();
     await loadCredits();
   } catch (error) {
-    showMessage("system", errorText(error));
+    showAiMessage("system", error.message || "エラーが発生しました");
     setStatus("");
     await loadCredits();
   } finally {
@@ -295,11 +589,16 @@ $("composer").addEventListener("submit", async event => {
 
 $("newConversation").onclick = async () => {
   try { await createConversation(); }
-  catch (error) { setStatus(errorText(error)); }
+  catch (error) { setStatus(error.message); }
 };
 
 $("loginButton").onclick = () => {
-  location.href = "/api/auth/discord";
+  const token = typeof turnstile !== "undefined" ? turnstile.getResponse() : "";
+  if (!token) {
+    alert("人間チェック（Turnstile）を完了してください。");
+    return;
+  }
+  location.href = "/api/auth/discord?token=" + encodeURIComponent(token);
 };
 
 $("logout").onclick = async () => {
@@ -310,14 +609,19 @@ $("logout").onclick = async () => {
 async function start() {
   try {
     const me = await api("/api/auth/me");
+    currentUser = me.user;
     $("app").hidden = false;
     $("logout").hidden = false;
     $("userName").textContent =
       me.user.global_name || me.user.username || "ログイン中";
-    await Promise.all([loadConversations(), loadCredits()]);
-    const first = $("conversationList").querySelector("button");
-    if (first) await first.click();
-  } catch (error) {
+
+    await Promise.all([loadCredits(), switchMode("realtime")]);
+    connectWebSocket();
+
+    syncTimer = setInterval(() => {
+      if (currentMode === "realtime") loadRealtimeHistory(true);
+    }, 4000);
+  } catch {
     $("login").hidden = false;
   }
 }
@@ -376,6 +680,5 @@ start();
   });
 })();
 </script>
-
 </body>
 </html>

@@ -5,6 +5,38 @@ const SESSION_SECONDS = 8 * 60 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+// ==========================================
+// リアルタイムチャット用 WebSocket クライアント管理
+// ==========================================
+const realtimeClients = new Set();
+
+function broadcastRealtime(payload) {
+  const raw = JSON.stringify(payload);
+  for (const client of realtimeClients) {
+    try {
+      client.ws.send(raw);
+    } catch {
+      realtimeClients.delete(client);
+    }
+  }
+}
+
+function broadcastPresence() {
+  const uniqueUsers = new Map();
+  for (const client of realtimeClients) {
+    uniqueUsers.set(client.user.id, {
+      id: client.user.id,
+      name: client.user.global_name || client.user.username || "メンバー",
+      role: client.user.role,
+    });
+  }
+  broadcastRealtime({
+    type: "presence",
+    count: uniqueUsers.size,
+    users: Array.from(uniqueUsers.values()),
+  });
+}
+
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -166,6 +198,7 @@ async function readJson(request) {
 function validUserId(id) {
   return typeof id === "string" && /^\d{17,20}$/.test(id);
 }
+
 const DELETION_CATEGORIES = new Set([
   "conversations",
   "activity_logs",
@@ -1346,6 +1379,107 @@ p{line-height:1.8;color:#625d70}
     }
 
     return json({ error: "Not found" }, 404);
+  }
+
+  // ==========================================
+  // リアルタイムチャット WebSocket & API
+  // ==========================================
+  if (path === "/api/realtime/ws" && method === "GET") {
+    const upgrade = request.headers.get("Upgrade") || "";
+    if (upgrade.toLowerCase() !== "websocket") {
+      return json({ error: "Expected WebSocket upgrade" }, 426);
+    }
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const entry = { ws: server, user };
+    realtimeClients.add(entry);
+    broadcastPresence();
+
+    server.addEventListener("message", async (event) => {
+      try {
+        const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+        if (msg.type === "ping") {
+          server.send(JSON.stringify({ type: "pong" }));
+        } else if (msg.type === "typing") {
+          broadcastRealtime({
+            type: "typing",
+            user_id: user.id,
+            display_name: user.global_name || user.username || "メンバー",
+          });
+        }
+      } catch {}
+    });
+
+    const cleanup = () => {
+      realtimeClients.delete(entry);
+      broadcastPresence();
+    };
+    server.addEventListener("close", cleanup);
+    server.addEventListener("error", cleanup);
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  if (path === "/api/realtime/messages" && method === "GET") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+
+    const room = (url.searchParams.get("room") || "general").slice(0, 40);
+    const afterId = Number(url.searchParams.get("after_id") || 0);
+
+    let query = `realtime_messages?room=eq.${encodeURIComponent(room)}&select=id,room,user_id,display_name,avatar,role,content,created_at`;
+    if (Number.isInteger(afterId) && afterId > 0) {
+      query += `&id=gt.${afterId}&order=id.asc&limit=50`;
+    } else {
+      query += `&order=id.desc&limit=50`;
+    }
+
+    const rows = await supabase(env, query);
+    const messages = (Number.isInteger(afterId) && afterId > 0)
+      ? (rows || [])
+      : (rows || []).slice().reverse();
+
+    return json({ ok: true, messages });
+  }
+
+  if (path === "/api/realtime/messages" && method === "POST") {
+    const user = await verifyMemberSession(request, env);
+    if (!user) return json({ error: "Unauthorized" }, 401);
+
+    const data = await readJson(request);
+    const room = typeof data.room === "string" && data.room.trim()
+      ? data.room.trim().slice(0, 40)
+      : "general";
+    const content = typeof data.content === "string" ? data.content.trim() : "";
+
+    if (!content || content.length > 1000) {
+      return json({ error: "メッセージは1〜1000文字で入力してください" }, 400);
+    }
+
+    const displayName = user.global_name || user.username || "メンバー";
+    const rows = await supabase(env, "realtime_messages", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({
+        room,
+        user_id: user.id,
+        display_name: displayName,
+        avatar: user.avatar || null,
+        role: user.role,
+        content,
+      }),
+    });
+
+    const saved = Array.isArray(rows) ? rows[0] : null;
+    if (saved) {
+      broadcastRealtime({ type: "message", message: saved });
+    }
+    return json({ ok: true, message: saved }, 201);
   }
 
   if (path === "/api/activities" && method === "GET") {
